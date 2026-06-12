@@ -142,43 +142,183 @@ const DEFAULT_STATE={
 };
 
 // ── MULTI-LINE CHART ──────────────────────────────────────────────────────────
-function Chart({series,h=160,unit=""}){
+function Chart({series,unit=""}){
+  const svgRef=useRef();
+  const[tooltip,setTooltip]=useState(null);
+  const[zoom,setZoom]=useState({start:0,end:1}); // 0-1 range of visible window
+  const[pinch,setPinch]=useState(null);
+  const[dragging,setDragging]=useState(null);
+
   const allY=series.flatMap(s=>s.data.map(d=>d.y)).filter(v=>!isNaN(v));
-  if(allY.length<2) return <div style={{height:h,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--muted)",fontSize:12}}>Log workouts with AMRAP sets to populate</div>;
-  const W=500,pad={l:40,r:10,t:10,b:26};
-  const mn=Math.min(...allY),mx=Math.max(...allY),rng=mx-mn||1;
   const allX=[...new Set(series.flatMap(s=>s.data.map(d=>d.x)))];
-  const py=v=>pad.t+(1-(v-mn)/rng)*(h-pad.t-pad.b);
-  const px=xi=>pad.l+(xi/(allX.length-1||1))*(W-pad.l-pad.r);
+
+  const H=260, W=500, pad={l:44,r:12,t:16,b:32};
+
+  // Visible window based on zoom
+  const visStart=Math.floor(zoom.start*(allX.length-1));
+  const visEnd=Math.ceil(zoom.end*(allX.length-1));
+  const visX=allX.slice(visStart,visEnd+1);
+
+  const visY=series.flatMap(s=>s.data.filter(d=>visX.includes(d.x)).map(d=>d.y)).filter(v=>!isNaN(v));
+  const mn=visY.length?Math.min(...visY)*0.97:0;
+  const mx=visY.length?Math.max(...visY)*1.03:100;
+  const rng=mx-mn||1;
+
+  const py=v=>pad.t+(1-(v-mn)/rng)*(H-pad.t-pad.b);
+  const px=xi=>pad.l+(xi/(visX.length-1||1))*(W-pad.l-pad.r);
+
+  // Grid lines
+  const gridCount=5;
+  const gridVals=Array.from({length:gridCount},(_,i)=>mn+i*(mx-mn)/(gridCount-1));
+
+  // X label density
+  const xStep=Math.max(1,Math.ceil(visX.length/8));
+
+  function getSVGX(clientX){
+    const rect=svgRef.current?.getBoundingClientRect();
+    if(!rect) return 0;
+    return((clientX-rect.left)/rect.width)*W;
+  }
+
+  function findClosestPoint(svgX){
+    if(!visX.length) return null;
+    const xi=Math.round((svgX-pad.l)/(W-pad.l-pad.r)*(visX.length-1));
+    const cxi=Math.max(0,Math.min(visX.length-1,xi));
+    const label=visX[cxi];
+    const points=series.map(ser=>{
+      const d=ser.data.find(p=>p.x===label);
+      return d?{label:ser.label,color:ser.color,y:d.y}:null;
+    }).filter(Boolean);
+    return{x:px(cxi),label,points};
+  }
+
+  // Touch handlers
+  function onTouchStart(e){
+    if(e.touches.length===1){
+      const tx=getSVGX(e.touches[0].clientX);
+      const pt=findClosestPoint(tx);
+      if(pt) setTooltip(pt);
+      setDragging({startX:e.touches[0].clientX,startZoom:{...zoom}});
+    } else if(e.touches.length===2){
+      setPinch({
+        dist:Math.abs(e.touches[0].clientX-e.touches[1].clientX),
+        midX:(e.touches[0].clientX+e.touches[1].clientX)/2,
+        startZoom:{...zoom}
+      });
+    }
+  }
+
+  function onTouchMove(e){
+    e.preventDefault();
+    if(e.touches.length===1&&dragging){
+      // Pan
+      const dx=(e.touches[0].clientX-dragging.startX);
+      const rect=svgRef.current?.getBoundingClientRect();
+      if(!rect) return;
+      const shift=-(dx/rect.width)*(dragging.startZoom.end-dragging.startZoom.start);
+      const s=dragging.startZoom;
+      const w=s.end-s.start;
+      const ns=Math.max(0,Math.min(1-w,s.start+shift));
+      setZoom({start:ns,end:ns+w});
+      const tx=getSVGX(e.touches[0].clientX);
+      const pt=findClosestPoint(tx);
+      if(pt) setTooltip(pt);
+    } else if(e.touches.length===2&&pinch){
+      // Pinch zoom
+      const dist=Math.abs(e.touches[0].clientX-e.touches[1].clientX);
+      const scale=pinch.dist/Math.max(dist,1);
+      const s=pinch.startZoom;
+      const mid=(s.start+s.end)/2;
+      const hw=(s.end-s.start)*scale/2;
+      const ns=Math.max(0,mid-hw);
+      const ne=Math.min(1,mid+hw);
+      if(ne-ns>0.05) setZoom({start:ns,end:ne});
+    }
+  }
+
+  function onTouchEnd(){setDragging(null);setPinch(null);}
+
+  function onMouseMove(e){
+    const tx=getSVGX(e.clientX);
+    const pt=findClosestPoint(tx);
+    if(pt) setTooltip(pt);
+  }
+
+  function resetZoom(){setZoom({start:0,end:1});setTooltip(null);}
+
+  if(allY.length<2) return(
+    <div style={{height:180,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--muted)",fontSize:13}}>
+      Log workouts with AMRAP sets to populate graph
+    </div>
+  );
+
+  const isZoomed=zoom.start>0.01||zoom.end<0.99;
+
   return(
-    <div>
-      <svg viewBox={`0 0 ${W} ${h}`} style={{width:"100%",height:h}} preserveAspectRatio="none">
-        {[mn,mn+(mx-mn)*.5,mx].map((v,i)=><g key={i}>
-          <line x1={pad.l} x2={W-pad.r} y1={py(v)} y2={py(v)} stroke="#262626" strokeWidth=".8"/>
-          <text x={pad.l-3} y={py(v)+3} textAnchor="end" fontSize="8" fill="#5a5a5a">{Math.round(v)}</text>
-        </g>)}
-        {allX.map((lbl,xi)=>xi%Math.max(1,Math.ceil(allX.length/7))===0&&
-          <text key={xi} x={px(xi)} y={h-5} textAnchor="middle" fontSize="8" fill="#5a5a5a">{lbl}</text>)}
-        {series.map((ser,si)=>{
-          if(!ser.data.length) return null;
-          const pts=ser.data.map(d=>`${px(allX.indexOf(d.x))},${py(d.y)}`).join(" ");
-          const uid=`g${si}${h}`;
-          return<g key={si}>
-            <defs><linearGradient id={uid} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor={ser.color} stopOpacity=".18"/>
-              <stop offset="100%" stopColor={ser.color} stopOpacity="0"/>
-            </linearGradient></defs>
-            {ser.data.length>1&&<polygon points={`${px(allX.indexOf(ser.data[0].x))},${py(mn)} ${pts} ${px(allX.indexOf(ser.data[ser.data.length-1].x))},${py(mn)}`} fill={`url(#${uid})`}/>}
-            <polyline points={pts} fill="none" stroke={ser.color} strokeWidth="2" strokeLinejoin="round"/>
-            {ser.data.map((d,di)=><circle key={di} cx={px(allX.indexOf(d.x))} cy={py(d.y)} r="3" fill={ser.color}/>)}
-          </g>;
-        })}
-      </svg>
-      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:8}}>
-        {series.map((ser,si)=><div key={si} style={{display:"flex",alignItems:"center",gap:5,fontSize:11}}>
-          <div style={{width:16,height:3,background:ser.color,borderRadius:2}}/>
-          <span style={{color:"#888"}}>{ser.label}</span>
-          {ser.data.length>0&&<span style={{color:ser.color,fontWeight:700}}>{ser.data[ser.data.length-1].y}{unit}</span>}
+    <div style={{userSelect:"none"}}>
+      {/* Zoom controls */}
+      <div style={{display:"flex",gap:6,marginBottom:8,alignItems:"center"}}>
+        <button style={{fontSize:10,fontWeight:700,letterSpacing:1,textTransform:"uppercase",padding:"3px 9px",background:"transparent",border:"1px solid var(--border)",color:"var(--muted)",cursor:"pointer",borderRadius:2}} onClick={()=>setZoom(z=>({start:Math.max(0,z.start+(z.end-z.start)*.2),end:Math.min(1,z.end-(z.end-z.start)*.2)}))}>+ Zoom In</button>
+        <button style={{fontSize:10,fontWeight:700,letterSpacing:1,textTransform:"uppercase",padding:"3px 9px",background:"transparent",border:"1px solid var(--border)",color:"var(--muted)",cursor:"pointer",borderRadius:2}} onClick={()=>setZoom(z=>({start:Math.max(0,z.start-(z.end-z.start)*.3),end:Math.min(1,z.end+(z.end-z.start)*.3)}))}>− Zoom Out</button>
+        {isZoomed&&<button style={{fontSize:10,fontWeight:700,letterSpacing:1,textTransform:"uppercase",padding:"3px 9px",background:"transparent",border:"1px solid var(--gold)",color:"var(--gold)",cursor:"pointer",borderRadius:2}} onClick={resetZoom}>Reset</button>}
+        <span style={{fontSize:10,color:"var(--muted)",marginLeft:4}}>Pinch or drag to zoom/pan</span>
+      </div>
+
+      {/* SVG chart */}
+      <div style={{position:"relative",touchAction:"none"}}>
+        <svg ref={svgRef} viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height:H,display:"block",cursor:"crosshair"}}
+          onMouseMove={onMouseMove} onMouseLeave={()=>setTooltip(null)}
+          onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}>
+
+          {/* Grid */}
+          {gridVals.map((v,i)=><g key={i}>
+            <line x1={pad.l} x2={W-pad.r} y1={py(v)} y2={py(v)} stroke="#222" strokeWidth="1"/>
+            <text x={pad.l-4} y={py(v)+4} textAnchor="end" fontSize="9" fill="#555">{Math.round(v)}</text>
+          </g>)}
+
+          {/* X labels */}
+          {visX.map((lbl,xi)=>xi%xStep===0&&<text key={xi} x={px(xi)} y={H-6} textAnchor="middle" fontSize="8.5" fill="#555">{lbl}</text>)}
+
+          {/* Series */}
+          {series.map((ser,si)=>{
+            const visData=ser.data.filter(d=>visX.includes(d.x));
+            if(!visData.length) return null;
+            const pts=visData.map(d=>`${px(visX.indexOf(d.x))},${py(d.y)}`).join(" ");
+            const uid=`cg${si}`;
+            const fx=px(visX.indexOf(visData[0].x));
+            const lx=px(visX.indexOf(visData[visData.length-1].x));
+            return<g key={si}>
+              <defs><linearGradient id={uid} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={ser.color} stopOpacity=".2"/>
+                <stop offset="100%" stopColor={ser.color} stopOpacity="0"/>
+              </linearGradient></defs>
+              {visData.length>1&&<polygon points={`${fx},${py(mn)} ${pts} ${lx},${py(mn)}`} fill={`url(#${uid})`}/>}
+              <polyline points={pts} fill="none" stroke={ser.color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/>
+              {visData.map((d,di)=><circle key={di} cx={px(visX.indexOf(d.x))} cy={py(d.y)} r="4" fill={ser.color} stroke="#0a0a0a" strokeWidth="1.5"/>)}
+            </g>;
+          })}
+
+          {/* Tooltip vertical line */}
+          {tooltip&&<line x1={tooltip.x} x2={tooltip.x} y1={pad.t} y2={H-pad.b} stroke="rgba(255,255,255,.2)" strokeWidth="1" strokeDasharray="4 3"/>}
+        </svg>
+
+        {/* Tooltip box */}
+        {tooltip&&<div style={{position:"absolute",top:10,left:tooltip.x>W*.6*((svgRef.current?.getBoundingClientRect()?.width||W)/W)?"auto":"calc("+((tooltip.x/W)*100)+"% + 8px)",right:tooltip.x>W*.6*((svgRef.current?.getBoundingClientRect()?.width||W)/W)?`calc(${((1-tooltip.x/W)*100)}% + 8px)`:"auto",background:"#1e1e1e",border:"1px solid var(--border)",borderRadius:4,padding:"7px 10px",minWidth:110,pointerEvents:"none",zIndex:10,boxShadow:"0 4px 16px rgba(0,0,0,.6)"}}>
+          <div style={{fontSize:10,color:"var(--gold)",fontWeight:700,marginBottom:5,letterSpacing:.5}}>{tooltip.label}</div>
+          {tooltip.points.map((p,i)=><div key={i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
+            <div style={{width:8,height:8,borderRadius:"50%",background:p.color,flexShrink:0}}/>
+            <span style={{fontSize:11,color:"#aaa"}}>{p.label}</span>
+            <span style={{fontSize:12,fontWeight:700,color:p.color,marginLeft:"auto"}}>{p.y}{unit}</span>
+          </div>)}
+        </div>}
+      </div>
+
+      {/* Legend */}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:10}}>
+        {series.filter(s=>s.data.length>0).map((ser,si)=><div key={si} style={{display:"flex",alignItems:"center",gap:5,fontSize:12}}>
+          <div style={{width:18,height:3,background:ser.color,borderRadius:2}}/>
+          <span style={{color:"#999"}}>{ser.label}</span>
+          <span style={{color:ser.color,fontWeight:700}}>{ser.data[ser.data.length-1].y}{unit}</span>
         </div>)}
       </div>
     </div>
@@ -820,7 +960,13 @@ function App(){
         <div style={{fontWeight:900,fontSize:20,letterSpacing:1,color:"#fff"}}>5/3/1 <span style={{color:"var(--gold)"}}>+</span></div>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           <div style={{background:"var(--gold)",color:"#000",fontWeight:700,fontSize:10,padding:"3px 8px",letterSpacing:1,borderRadius:2}}>C{st.cycle}·W{st.week}</div>
-          <button style={{...btnStyle("ghost","sm"),padding:"5px 9px",fontSize:13,lineHeight:1,color:"var(--gold)",borderColor:"var(--gold)"}} onClick={()=>{setTab("workout");}} title="Go to workout">▶▶</button>
+          <button style={{...btnStyle("ghost","sm"),padding:"5px 9px",fontSize:13,lineHeight:1,color:"var(--gold)",borderColor:"var(--gold)"}} onClick={()=>{
+            setTab("workout");
+            setTimeout(()=>{
+              const el=document.getElementById("currentDay");
+              if(el){el.scrollIntoView({behavior:"smooth",block:"center"});el.style.outline="2px solid var(--gold)";setTimeout(()=>el.style.outline="none",1200);}
+            },100);
+          }} title="Go to current workout">▶▶</button>
           <button style={{...btnStyle("ghost","sm"),padding:"5px 9px",fontSize:15,lineHeight:1}} onClick={()=>setShowSettings(true)} title="Settings">⚙</button>
         </div>
       </div>
@@ -850,7 +996,7 @@ function App(){
             <button style={{...selBtnStyle(false),color:"var(--green)",borderColor:"var(--green)",marginLeft:"auto"}} onClick={advanceWeek}>Advance →</button>
           </div>
           <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:14}}>
-            {DAY_LABELS.map((d,i)=><button key={i} style={selBtnStyle(st.day===i)} onClick={()=>setSt(p=>({...p,day:i}))}>{d}</button>)}
+            {DAY_LABELS.map((d,i)=><button key={i} id={st.day===i?"currentDay":undefined} style={selBtnStyle(st.day===i)} onClick={()=>setSt(p=>({...p,day:i}))}>{d}</button>)}
           </div>
 
           {!tm?<div style={cardStyle()}><p style={{color:"var(--muted)",textAlign:"center",padding:20,fontSize:13}}>Open ⚙ to set training maxes.</p></div>:<>
@@ -1069,7 +1215,7 @@ function App(){
               <button style={btnStyle("gold")} onClick={logBW}>Log</button>
             </div>
             {st.bwLog.length>0&&<>
-              <Chart series={[{label:"Bodyweight",color:"var(--green)",data:st.bwLog.map(b=>({x:b.date.slice(0,5),y:b.w}))}]} h={90} unit={toLbl(st.cfg.unit)}/>
+              <Chart series={[{label:"Bodyweight",color:"var(--green)",data:st.bwLog.map(b=>({x:b.date.slice(0,5),y:b.w}))}]} unit={toLbl(st.cfg.unit)}/>
               <div style={{color:"var(--muted)",fontSize:12,marginTop:6,textAlign:"right"}}>
                 Latest: <span style={{color:"var(--green)",fontWeight:700}}>{st.bwLog[st.bwLog.length-1].w}{toLbl(st.cfg.unit)}</span>
                 {st.bwLog.length>1&&<span style={{marginLeft:8}}>{st.bwLog[st.bwLog.length-1].w>st.bwLog[0].w?"▲":"▼"}{Math.abs(st.bwLog[st.bwLog.length-1].w-st.bwLog[0].w).toFixed(1)} total</span>}
@@ -1144,7 +1290,7 @@ function App(){
               Est. 1RM Progress <span style={tagStyle()}>All Lifts</span>
               {st.bwLog.length>0&&<span style={tagStyle("var(--green)")}>+ Bodyweight</span>}
             </div>
-            <Chart h={180} unit={toLbl(st.cfg.unit)} series={[
+            <Chart unit={toLbl(st.cfg.unit)} series={[
               {label:"Squat",    color:"#c9a84c",data:(st.prs.squat||[]).map(p=>({x:`C${p.cycle}W${p.week}`,y:toDisp(p.est,st.cfg.unit)}))},
               {label:"Bench",    color:"#2980b9",data:(st.prs.bench||[]).map(p=>({x:`C${p.cycle}W${p.week}`,y:toDisp(p.est,st.cfg.unit)}))},
               {label:"Deadlift", color:"#c0392b",data:(st.prs.deadlift||[]).map(p=>({x:`C${p.cycle}W${p.week}`,y:toDisp(p.est,st.cfg.unit)}))},
