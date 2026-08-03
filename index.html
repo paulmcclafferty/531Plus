@@ -456,7 +456,7 @@ function downloadBackupFile(state, quiet){
     var blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
     var a=document.createElement("a");
     var d=new Date();
-    var stamp=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    var mm=d.getMonth()+1,dd=d.getDate(); var stamp=d.getFullYear()+"-"+(mm<10?"0":"")+mm+"-"+(dd<10?"0":"")+dd;
     a.href=URL.createObjectURL(blob);
     a.download="531plus-backup-"+stamp+".json";
     a.rel="noopener";
@@ -722,6 +722,7 @@ function WeightEditPopover(props){
 
 function Wizard(p){
   var onComplete=p.onComplete;
+  var onRestore=p.onRestore;
   var stepState=useState(0); var step=stepState[0],setStep=stepState[1];
   var varState=useState("original"); var variant=varState[0],setVariant=varState[1];
   var accState=useState("crossfit"); var acc=accState[0],setAcc=accState[1];
@@ -730,6 +731,94 @@ function Wizard(p){
   var inpState=useState({}); var inp=inpState[0],setInp=inpState[1];
   var custState=useState({squat:[],bench:[],deadlift:[],press:[]}); var customAcc=custState[0],setCustomAcc=custState[1];
   var custInpState=useState({squat:"",bench:"",deadlift:"",press:""}); var custInp=custInpState[0],setCustInp=custInpState[1];
+  var msgState=useState(null); var wizMsg=msgState[0],setWizMsg=msgState[1];
+  var jsonRef=useRef();
+  var csvRefW=useRef();
+
+  function importWizardJSON(e){
+    var file=e.target.files[0]; e.target.value=""; if(!file) return;
+    var reader=new FileReader();
+    reader.onload=function(ev){
+      try{
+        var data=JSON.parse(ev.target.result);
+        if(!data||typeof data!=="object") throw new Error("Invalid file");
+        if(onRestore) onRestore(data);
+        else onComplete(Object.assign({variant:"original",accStyle:"crossfit",unit:"kg",deloadEvery7:false,tms:data.tms||{},customAcc:data.customAcc||{}}, data));
+      }catch(err){
+        setWizMsg("Could not import: "+(err.message||err));
+      }
+    };
+    reader.readAsText(file);
+  }
+
+  function importWizardCSV(e){
+    var file=e.target.files[0]; e.target.value=""; if(!file) return;
+    var reader=new FileReader();
+    reader.onload=function(ev){
+      try{
+        var lines=ev.target.result.split("\n").map(function(l){return l.trim();}).filter(Boolean);
+        function parseRow(line){
+          var out=[],cur="",inQ=false;
+          for(var i=0;i<line.length;i++){
+            var ch=line[i];
+            if(ch==='"'){ inQ=!inQ; }
+            else if(ch===","&&!inQ){ out.push(cur.trim()); cur=""; }
+            else cur+=ch;
+          }
+          out.push(cur.trim()); return out;
+        }
+        function normLift(name){
+          var n=(name||"").toLowerCase();
+          if(n.indexOf("dead")>=0) return "deadlift";
+          if(n.indexOf("squat")>=0) return "squat";
+          if(n.indexOf("bench")>=0) return "bench";
+          if(n.indexOf("military")>=0||n.indexOf("press")>=0) return "press";
+          return null;
+        }
+        var parsed=lines.map(parseRow);
+        var dataStart=-1;
+        for(var i=0;i<parsed.length;i++){
+          if(parsed[i][0]==="Cycle#"){ dataStart=i+1; break; }
+        }
+        if(dataStart<0) throw new Error("Not a Sarasoft export (no Cycle# header)");
+        var history=[],prs={squat:[],bench:[],deadlift:[],press:[]},latestTM={};
+        var maxCycle=1,maxWeek=1,totalW=0;
+        for(var i=dataStart;i<parsed.length;i++){
+          var row=parsed[i];
+          if(!row[0]||isNaN(parseInt(row[0]))) continue;
+          var cycle=parseInt(row[0]), week=parseInt(row[1]);
+          var lift=normLift(row[2]), tm=parseFloat(row[3])||0;
+          var sarasoftActual=parseFloat(row[4])||0;
+          var date=(row[5]||"").replace(/"/g,"").trim();
+          var notes=(row[6]||"").replace(/"/g,"").trim();
+          if(!lift) continue;
+          if(cycle>maxCycle||(cycle===maxCycle&&week>maxWeek)){ maxCycle=cycle; maxWeek=week; }
+          totalW=Math.max(totalW,(cycle-1)*4+week);
+          if(tm>0) latestTM[lift]=tm;
+          var amrapReps=parseInt(row[12])||0, amrapWt=parseFloat(row[13])||0;
+          var calcEst=(amrapReps>0&&amrapWt>0)?epley(amrapWt,amrapReps):null;
+          var est=sarasoftActual>0?Math.round(sarasoftActual):calcEst;
+          if(est) prs[lift].push({cycle:cycle,week:week,est:est,tm:tm,topWt:amrapWt,amrap:amrapReps,date:date});
+          history.push({id:Date.now()+i,date:date,cycle:cycle,week:week,day:LIFTS.indexOf(lift),lift:LIFT_LABELS[lift],topSet:(amrapWt||0)+"kg",amrap:amrapReps||"—",notes:notes||""});
+        }
+        if(!history.length) throw new Error("No workout rows found");
+        var newTMs={};
+        LIFTS.forEach(function(l){ if(latestTM[l]) newTMs[l]=r5(latestTM[l]); });
+        var nextWeek=maxWeek>=4?1:maxWeek+1, nextCycle=maxWeek>=4?maxCycle+1:maxCycle;
+        if(onRestore){
+          onRestore({
+            cfg:{variant:"original",accStyle:"crossfit",unit:"kg",deloadEvery7:false,warmup:true,joker:false,restSecs:180,autoBackup:true,dayOrder:["squat","bench","deadlift","press"]},
+            tms:newTMs, history:history.reverse(), prs:prs,
+            week:nextWeek, cycle:nextCycle, day:0, totalWeeks:totalW,
+            amraps:{}, checks:{}, notes:{}, bwLog:[], customAcc:{squat:[],bench:[],deadlift:[],press:[]}
+          });
+        }
+      }catch(err){
+        setWizMsg("CSV import failed: "+(err.message||err));
+      }
+    };
+    reader.readAsText(file);
+  }
 
   function finish(){
     var tms={};
@@ -762,21 +851,36 @@ function Wizard(p){
         })
       ),
       // Step content
-      step===0&&h("div",{className:"card"},
-        h("div",{className:"section-title"},"Choose Program"),
-        VARIANTS.map(function(v){
-          return h("div",{key:v.id,className:"variant-card"+(variant===v.id?" selected":""),onClick:function(){setVariant(v.id);}},
-            h("div",{style:{display:"flex",alignItems:"center",gap:8}},
-              h("div",{className:"radio"+(variant===v.id?" selected":"")}),
-              h("div",null,
-                h("div",{style:{fontWeight:700,fontSize:13,color:"#ddd"}},v.name),
-                h("div",{style:{color:"#999",fontSize:12,marginTop:2}},v.desc)
+      step===0&&h("div",null,
+        h("div",{className:"card",style:{borderColor:"var(--gold)"}},
+          h("div",{className:"section-title"},"Restore backup"),
+          h("p",{style:{fontSize:13,color:"var(--muted)",marginBottom:12,lineHeight:1.45}},
+            "Had 531+ before? Import a JSON backup or Sarasoft CSV to restore TMs, history, and PRs."),
+          h("div",{style:{display:"flex",flexDirection:"column",gap:8}},
+            h("button",{className:"btn btn-gold",style:{width:"100%"},onClick:function(){jsonRef.current&&jsonRef.current.click();}},"Import JSON backup"),
+            h("button",{className:"btn btn-outline",style:{width:"100%"},onClick:function(){csvRefW.current&&csvRefW.current.click();}},"Import Sarasoft CSV")
+          ),
+          h("input",{ref:jsonRef,type:"file",accept:".json,application/json",style:{display:"none"},onChange:importWizardJSON}),
+          h("input",{ref:csvRefW,type:"file",accept:".csv,.txt",style:{display:"none"},onChange:importWizardCSV}),
+          wizMsg&&h("div",{style:{marginTop:10,padding:"8px 10px",background:"rgba(231,76,60,.15)",border:"1px solid var(--red)",borderRadius:8,fontSize:12,color:"#f5b7b1"}},wizMsg)
+        ),
+        h("div",{className:"card"},
+          h("div",{className:"section-title"},"Or set up new"),
+          h("div",{style:{fontSize:12,color:"var(--muted)",marginBottom:10}},"Choose program, then continue."),
+          VARIANTS.map(function(v){
+            return h("div",{key:v.id,className:"variant-card"+(variant===v.id?" selected":""),onClick:function(){setVariant(v.id);}},
+              h("div",{style:{display:"flex",alignItems:"center",gap:8}},
+                h("div",{className:"radio"+(variant===v.id?" selected":"")}),
+                h("div",null,
+                  h("div",{style:{fontWeight:700,fontSize:13,color:"#ddd"}},v.name),
+                  h("div",{style:{color:"#999",fontSize:12,marginTop:2}},v.desc)
+                )
               )
-            )
-          );
-        }),
-        h("div",{style:{display:"flex",justifyContent:"flex-end",marginTop:8}},
-          h("button",{className:"btn btn-gold",onClick:function(){setStep(1);}},"Next"))
+            );
+          }),
+          h("div",{style:{display:"flex",justifyContent:"flex-end",marginTop:8}},
+            h("button",{className:"btn btn-gold",onClick:function(){setStep(1);}},"Next"))
+        )
       ),
       step===1&&h("div",{className:"card"},
         h("div",{className:"section-title"},"Accessories"),
@@ -1229,7 +1333,7 @@ function Settings(p){
         h("button",{className:"btn btn-gold",style:{width:"100%",marginTop:16,marginBottom:4},onClick:save},"Save Settings"),
 
         // Data & Backup
-        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.8 · Aug 2026"),
+        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.8.1 · Aug 2026"),
         h(SectionHeader,{name:"backup",title:"Data & Backup",subtitle:"Export, import, CSV"}),
         openSection==="backup"&&h("div",{style:{paddingBottom:6,paddingTop:4}},
           h("div",{className:"flex-row",style:{flexWrap:"wrap"}},
@@ -1490,7 +1594,28 @@ function App(){
     setBwInp("");
   }
 
-  if(!st.setupDone)return h(Wizard,{onComplete:completeSetup});
+  if(!st.setupDone)return h(Wizard,{
+    onComplete:completeSetup,
+    onRestore:function(data){
+      try{
+        var merged=Object.assign({},DEFAULT,data,{setupDone:true});
+        if(!merged.cfg) merged.cfg=Object.assign({},DEFAULT.cfg);
+        else merged.cfg=Object.assign({},DEFAULT.cfg,data.cfg||{});
+        if(!merged.tms) merged.tms={};
+        if(!merged.history) merged.history=[];
+        if(!merged.prs) merged.prs={squat:[],bench:[],deadlift:[],press:[]};
+        if(!merged.amraps) merged.amraps={};
+        if(!merged.checks) merged.checks={};
+        if(!merged.notes) merged.notes={};
+        if(merged.day==null) merged.day=0;
+        if(merged.week==null) merged.week=1;
+        if(merged.cycle==null) merged.cycle=1;
+        setSt(merged);
+      }catch(err){
+        try{ window.__531err&&window.__531err("Restore failed: "+err.message); }catch(e){}
+      }
+    }
+  });
 
   var lift=dayLift(st.cfg,st.day);
   var tm=st.tms[lift]||0;
@@ -1626,7 +1751,7 @@ function App(){
       h("div",{style:{display:"flex",flexDirection:"column",gap:8}},
         LIFTS.map(function(l){
           var tmv=st.tms[l];
-          var cPRs=(st.prs[l]||[]).filter(function(pr){return pr.cycle===st.cycle;});
+          var cPRs=((st.prs&&st.prs[l])||[]).filter(function(pr){return pr&&pr.cycle===st.cycle;});
           var best=cPRs.length?Math.max.apply(null,cPRs.map(function(pr){return pr.est;})):0;
           var delta=tmv&&best?best-tmv:null;
           return h("div",{key:l,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid var(--border)"}},
