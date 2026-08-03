@@ -1405,7 +1405,7 @@ function Settings(p){
         h("button",{className:"btn btn-gold",style:{width:"100%",marginTop:16,marginBottom:4},onClick:save},"Save Settings"),
 
         // Data & Backup
-        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.8.3 · Aug 2026"),
+        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.8.4 · Aug 2026"),
         h(SectionHeader,{name:"backup",title:"Data & Backup",subtitle:"Export, import, CSV"}),
         openSection==="backup"&&h("div",{style:{paddingBottom:6,paddingTop:4}},
           h("div",{className:"flex-row",style:{flexWrap:"wrap"}},
@@ -1607,14 +1607,10 @@ function App(){
   function setNote(k,v){setSt(function(p){var n=Object.assign({},p.notes);n[k]=v;return Object.assign({},p,{notes:n});});}
   function setAmrap(k,v){setSt(function(p){var a=Object.assign({},p.amraps);a[k]=v;return Object.assign({},p,{amraps:a});});}
   function setWeightOverride(k,v){setSt(function(p){var w=Object.assign({},p.weightOverrides||{});if(v===null){delete w[k];}else{w[k]=v;}return Object.assign({},p,{weightOverrides:w});});}
-  var editPopState=useState(null); var editPop=editPopState[0],setEditPop=editPopState[1]; // {groupKey,index,baseValue,unit}
   var focusMode = !!(st.cfg&&st.cfg.focusMode);
   function toggleFocusMode(){
     setSt(function(p){return Object.assign({},p,{cfg:Object.assign({},p.cfg,{focusMode:!p.cfg.focusMode})});});
   }
-  var logBusyState=useState(false); var logBusy=logBusyState[0],setLogBusy=logBusyState[1];
-  var undoState=useState(null); var undoToast=undoState[0],setUndoToast=undoState[1];
-
   // Apply an edited display-weight at `index` within a group, cascading the same
   // delta (in storage units, i.e. kg) forward to every later index in that group.
   function applyWeightCascade(groupKey,fromIndex,groupSize,newDisplayWt,baseWeights,currentDisplayWt,actualWeights){
@@ -1706,6 +1702,15 @@ function App(){
     setSt(function(p){return Object.assign({},p,{bwLog:p.bwLog.concat([{date:new Date().toLocaleDateString(),w:v}])});});
     setBwInp("");
   }
+
+    // All App hooks MUST be before any conditional return (React #310)
+  var editPopState=useState(null); var editPop=editPopState[0],setEditPop=editPopState[1];
+  var logBusyState=useState(false); var logBusy=logBusyState[0],setLogBusy=logBusyState[1];
+  var undoState=useState(null); var undoToast=undoState[0],setUndoToast=undoState[1];
+  var histExpandState=useState(null); var histExpanded=histExpandState[0],setHistExpanded=histExpandState[1];
+  var histDeleteState=useState(null); var histDeleteConfirm=histDeleteState[0],setHistDeleteConfirm=histDeleteState[1];
+  var histEditState=useState(null); var histEdit=histEditState[0],setHistEdit=histEditState[1];
+  var prResetState=useState(null); var prResetLift=prResetState[0],setPrResetLift=prResetState[1];
 
   if(!st.setupDone)return h(Wizard,{
     onComplete:completeSetup,
@@ -2645,10 +2650,7 @@ function App(){
   );
 
   // ── HISTORY TAB ──────────────────────────────────────────────────────────
-  var histExpandState=useState(null); var histExpanded=histExpandState[0],setHistExpanded=histExpandState[1];
-  var histDeleteState=useState(null); var histDeleteConfirm=histDeleteState[0],setHistDeleteConfirm=histDeleteState[1];
-  var histEditState=useState(null); var histEdit=histEditState[0],setHistEdit=histEditState[1]; // {id,topSet,amrap,notes,date} or null
-  var prResetState=useState(null); var prResetLift=prResetState[0],setPrResetLift=prResetState[1]; // lift key being reset, or null
+
 
   function resetPRsToCurrentCycle(liftKey){
     // Trim all PR records for this lift to only those from the current cycle onwards.
