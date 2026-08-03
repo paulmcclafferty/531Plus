@@ -82,6 +82,22 @@ textarea:focus{outline:none;border-color:var(--gold);box-shadow:0 0 0 3px var(--
 </head>
 <body>
 <div id="app"><div style="color:#888;text-align:center;padding:40px">Loading 531+...</div></div>
+<script>
+window.__531err=function(msg){
+  try{
+    var el=document.getElementById("app");
+    if(!el) return;
+    el.innerHTML='<div style="background:#1c1c1e;color:#e8e8ea;padding:24px;font-family:system-ui;max-width:480px;margin:40px auto;border-radius:12px;border:1px solid #e74c3c">'
+      +'<div style="font-weight:800;color:#e74c3c;margin-bottom:8px">531+ hit an error</div>'
+      +'<div style="font-size:13px;line-height:1.5;margin-bottom:12px;word-break:break-word"></div>'
+      +'<div style="font-size:12px;color:#6b6b6e">Try: clear site data for this page, then reload. Your lifts live in this browser\'s storage — export JSON from Settings when the app works.</div>'
+      +'</div>';
+    el.querySelectorAll("div")[2].textContent=String(msg||"Unknown error");
+  }catch(e){}
+};
+window.addEventListener("error",function(ev){window.__531err((ev&&ev.message)||"Script error");});
+window.addEventListener("unhandledrejection",function(ev){window.__531err((ev&&ev.reason&&(ev.reason.message||ev.reason))||"Promise error");});
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
@@ -431,9 +447,38 @@ var STORAGE_KEY="531plus_v3";
 function loadSt(){try{var d=localStorage.getItem(STORAGE_KEY);return d?JSON.parse(d):null;}catch(e){return null;}}
 function saveSt(s){try{localStorage.setItem(STORAGE_KEY,JSON.stringify(s));}catch(e){}}
 
+// Download a JSON backup to the device (outside browser storage).
+// This is what survives "clear cookies / site data".
+function downloadBackupFile(state, quiet){
+  try{
+    if(!state) return;
+    var payload=Object.assign({},state,{_exportedAt:new Date().toISOString(),_app:"531plus"});
+    var blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
+    var a=document.createElement("a");
+    var d=new Date();
+    var stamp=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    a.href=URL.createObjectURL(blob);
+    a.download="531plus-backup-"+stamp+".json";
+    a.rel="noopener";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function(){ try{ URL.revokeObjectURL(a.href); a.remove(); }catch(e){} }, 1500);
+    try{ localStorage.setItem("531plus_last_backup", String(Date.now())); }catch(e){}
+  }catch(e){
+    if(!quiet) try{ alert("Backup download failed. Use Settings → Export JSON."); }catch(e2){}
+  }
+}
+function lastBackupAgeDays(){
+  try{
+    var t=parseInt(localStorage.getItem("531plus_last_backup")||"0",10);
+    if(!t) return 9999;
+    return (Date.now()-t)/(1000*60*60*24);
+  }catch(e){ return 9999; }
+}
+
 var DEFAULT={
   setupDone:false,
-  cfg:{variant:"original",accStyle:"crossfit",unit:"kg",deloadEvery7:false,warmup:true,joker:false,restSecs:180,timerOnWarmup:false,jokerAfterAmrap:false,incLower:5,incUpper:2.5,focusMode:false,dayOrder:["squat","bench","deadlift","press"]},
+  cfg:{variant:"original",accStyle:"crossfit",unit:"kg",deloadEvery7:false,warmup:true,joker:false,restSecs:180,timerOnWarmup:false,jokerAfterAmrap:false,incLower:5,incUpper:2.5,focusMode:false,dayOrder:["squat","bench","deadlift","press"],autoBackup:true},
   tms:{},week:1,day:0,cycle:1,totalWeeks:0,
   current:{cycle:1,week:1,day:0}, // true "where you should train next" — only logWorkout/advanceWeek touch this
   amraps:{},checks:{},notes:{},wodScale:{},jokerCounts:{},weightOverrides:{},
@@ -854,6 +899,7 @@ function Settings(p){
   var incLState=useState(cfg.incLower!=null?cfg.incLower:5); var incLower=incLState[0],setIncLower=incLState[1];
   var incUState=useState(cfg.incUpper!=null?cfg.incUpper:2.5); var incUpper=incUState[0],setIncUpper=incUState[1];
   var dayOrderState=useState(normalizeDayOrder(cfg.dayOrder)); var dayOrder=dayOrderState[0],setDayOrder=dayOrderState[1];
+  var autoBackupState=useState(cfg.autoBackup!==false); var autoBackup=autoBackupState[0],setAutoBackup=autoBackupState[1];
   var inpState=useState(Object.fromEntries(LIFTS.map(function(l){return [l,tms[l]?String(toDisp(tms[l],cfg.unit)):""];})));
   var inp=inpState[0],setInp=inpState[1];
   var oneRmState=useState({}); var oneRm=oneRmState[0],setOneRm=oneRmState[1];
@@ -876,7 +922,7 @@ function Settings(p){
         if(!isNaN(v)&&v>0) newTms[l]=rndW(fromDisp(v,unit),"kg");
       }
     });
-    onSave({variant:variant,accStyle:acc,unit:unit,deloadEvery7:deload7,warmup:warmupOn,joker:jokerOn,restSecs:restSecs,timerOnWarmup:timerOnWarmup,jokerAfterAmrap:jokerAfterAmrap,incLower:incLower,incUpper:incUpper,dayOrder:dayOrder,tms:newTms,customAcc:customAcc});
+    onSave({variant:variant,accStyle:acc,unit:unit,deloadEvery7:deload7,warmup:warmupOn,joker:jokerOn,restSecs:restSecs,timerOnWarmup:timerOnWarmup,jokerAfterAmrap:jokerAfterAmrap,incLower:incLower,incUpper:incUpper,dayOrder:dayOrder,autoBackup:autoBackup,tms:newTms,customAcc:customAcc});
     onClose();
   }
   function deload5pct(){
@@ -892,8 +938,7 @@ function Settings(p){
   }
 
   function exportJSON(){
-    var blob=new Blob([JSON.stringify(appState,null,2)],{type:"application/json"});
-    var a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download="531plus_backup.json";a.click();
+    downloadBackupFile(appState, false);
   }
 
   function exportCSV(){
@@ -1094,6 +1139,14 @@ function Settings(p){
                 h("button",{className:"sel-btn"+(!timerOnWarmup?" active":""),onClick:function(){setTimerOnWarmup(false);}},"Off")
               )
             ),
+            h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between"}},
+              h("span",{style:{fontSize:13}},"Auto-backup on log"),
+              h("div",{className:"flex-row",style:{gap:6}},
+                h("button",{className:"sel-btn"+(autoBackup?" active":""),onClick:function(){setAutoBackup(true);}},"On"),
+                h("button",{className:"sel-btn"+(!autoBackup?" active":""),onClick:function(){setAutoBackup(false);}},"Off")
+              )
+            ),
+            h("p",{style:{fontSize:10,color:"var(--muted)",marginTop:-4}},"Downloads a JSON file every time you log — survives clearing site data."),
             h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:6}},
               h("span",{style:{fontSize:13}},"TM increment Squat/DL"),
               h("input",{className:"inp",type:"number",inputMode:"decimal",value:incLower,style:{width:80},onChange:function(e){setIncLower(parseFloat(e.target.value)||5);}})
@@ -1176,7 +1229,7 @@ function Settings(p){
         h("button",{className:"btn btn-gold",style:{width:"100%",marginTop:16,marginBottom:4},onClick:save},"Save Settings"),
 
         // Data & Backup
-        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.7 · Aug 2026"),
+        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.8 · Aug 2026"),
         h(SectionHeader,{name:"backup",title:"Data & Backup",subtitle:"Export, import, CSV"}),
         openSection==="backup"&&h("div",{style:{paddingBottom:6,paddingTop:4}},
           h("div",{className:"flex-row",style:{flexWrap:"wrap"}},
@@ -1219,11 +1272,21 @@ function App(){
   var swipeDirState=useState(null); var swipeDir=swipeDirState[0],setSwipeDir=swipeDirState[1];
 
   useEffect(function(){saveSt(st);},[st]);
+  // Weekly auto-backup if data exists and no recent download
+  useEffect(function(){
+    if(!st.setupDone) return;
+    if(st.cfg.autoBackup===false) return;
+    var hasData=(st.history&&st.history.length>0)||LIFTS.some(function(l){return st.tms[l];});
+    if(!hasData) return;
+    if(lastBackupAgeDays()<7) return;
+    var t=setTimeout(function(){ downloadBackupFile(st, true); }, 2500);
+    return function(){ clearTimeout(t); };
+  },[st.setupDone]);
 
   function upd(patch){setSt(function(p){return Object.assign({},p,patch);});}
 
   function completeSetup(data){
-    setSt(function(p){return Object.assign({},p,{setupDone:true,cfg:{variant:data.variant,accStyle:data.accStyle,unit:data.unit,deloadEvery7:data.deloadEvery7,warmup:true,joker:false,restSecs:180},tms:data.tms,customAcc:data.customAcc||{squat:[],bench:[],deadlift:[],press:[]},week:1,day:0,cycle:1,totalWeeks:0,current:{cycle:1,week:1,day:0}});});
+    setSt(function(p){return Object.assign({},p,{setupDone:true,cfg:{variant:data.variant,accStyle:data.accStyle,unit:data.unit,deloadEvery7:data.deloadEvery7,warmup:true,joker:false,restSecs:180,timerOnWarmup:false,jokerAfterAmrap:false,incLower:5,incUpper:2.5,focusMode:false,dayOrder:["squat","bench","deadlift","press"],autoBackup:true},tms:data.tms||{},customAcc:data.customAcc||{squat:[],bench:[],deadlift:[],press:[]},week:1,day:0,cycle:1,totalWeeks:0,current:{cycle:1,week:1,day:0},amraps:{},checks:{},notes:{},history:[],prs:{},bwLog:[]});});
   }
 
   function saveSettings(data,isImport){
@@ -1238,7 +1301,7 @@ function App(){
     setSt(function(p){
       var order=normalizeDayOrder(data.dayOrder||p.cfg.dayOrder);
       var nd=Math.min(p.day, order.length-1);
-      return Object.assign({},p,{cfg:Object.assign({},p.cfg,{variant:data.variant,accStyle:data.accStyle,unit:data.unit,deloadEvery7:data.deloadEvery7,warmup:data.warmup!==false,joker:data.joker||false,restSecs:data.restSecs||0,timerOnWarmup:!!data.timerOnWarmup,jokerAfterAmrap:!!data.jokerAfterAmrap,incLower:data.incLower!=null?data.incLower:5,incUpper:data.incUpper!=null?data.incUpper:2.5,dayOrder:order}),tms:data.tms,customAcc:data.customAcc||p.customAcc,day:nd});
+      return Object.assign({},p,{cfg:Object.assign({},p.cfg,{variant:data.variant,accStyle:data.accStyle,unit:data.unit,deloadEvery7:data.deloadEvery7,warmup:data.warmup!==false,joker:data.joker||false,restSecs:data.restSecs||0,timerOnWarmup:!!data.timerOnWarmup,jokerAfterAmrap:!!data.jokerAfterAmrap,incLower:data.incLower!=null?data.incLower:5,incUpper:data.incUpper!=null?data.incUpper:2.5,dayOrder:order,autoBackup:data.autoBackup!==false}),tms:data.tms,customAcc:data.customAcc||p.customAcc,day:nd});
     });
   }
 
@@ -1396,6 +1459,18 @@ function App(){
     setSt(function(p){return Object.assign({},p,{history:[entry].concat(p.history),current:{cycle:p.cycle,week:p.week,day:p.day}});});
     setUndoToast({id:entryId,label:entry.lift+" logged"});
     setTimeout(function(){setUndoToast(function(t){return t&&t.id===entryId?null:t;});},8000);
+    // Auto-backup to device Downloads so history survives clearing site data
+    try{
+      if(st.cfg.autoBackup!==false){
+        setTimeout(function(){
+          try{
+            var latest=null;
+            try{ latest=JSON.parse(localStorage.getItem(STORAGE_KEY)); }catch(e){}
+            downloadBackupFile(latest||Object.assign({},st,{history:[entry].concat(st.history||[])}), true);
+          }catch(e){}
+        }, 400);
+      }
+    }catch(e){}
     setTab("home");
   }
   function undoLastLog(){
@@ -1946,30 +2021,35 @@ function App(){
     var selPtState=useState(null); var selectedPoint=selPtState[0],setSelectedPoint=selPtState[1];
     var dragRef=useRef({moved:false,startX:0,startY:0}); // tracks whether the current pointer gesture was a drag, so we can ignore the click it fires on release
 
-    // Normalize every point's x to ISO yyyy-mm-dd so sorting and matching are stable
-    // across locale date strings from toLocaleDateString / CSV imports.
-    var normSeries=series.map(function(s){
-      return {
-        label:s.label,
-        color:s.color,
-        data:(s.data||[]).map(function(d){
-          return {x:toISODateKey(d.x), y:d.y, raw:d.x};
-        })
-      };
-    });
-    var allX=[];
-    normSeries.forEach(function(s){
-      s.data.forEach(function(d){
-        if(d.x && allX.indexOf(d.x)<0) allX.push(d.x);
+    function buildNorm(){
+      var ns=(series||[]).map(function(s){
+        return {
+          label:s.label,
+          color:s.color,
+          data:(s.data||[]).map(function(d){
+            var key=toISODateKey(d.x);
+            return {x:key, y:d.y};
+          }).filter(function(d){return d.x;})
+        };
       });
-    });
-    allX.sort(function(a,b){
-      var da=parseDateMs(a), db=parseDateMs(b);
-      if(isNaN(da)&&isNaN(db)) return String(a).localeCompare(String(b));
-      if(isNaN(da)) return 1;
-      if(isNaN(db)) return -1;
-      return da-db;
-    });
+      var xs=[];
+      ns.forEach(function(s){
+        s.data.forEach(function(d){
+          if(xs.indexOf(d.x)<0) xs.push(d.x);
+        });
+      });
+      xs.sort(function(a,b){
+        var da=parseDateMs(a), db=parseDateMs(b);
+        if(isNaN(da)&&isNaN(db)) return String(a).localeCompare(String(b));
+        if(isNaN(da)) return 1;
+        if(isNaN(db)) return -1;
+        return da-db;
+      });
+      return {normSeries:ns, allX:xs};
+    }
+    var built=buildNorm();
+    var normSeries=built.normSeries;
+    var allX=built.allX;
 
     // Build the chart ONCE per actual data change (series/unit). Selection highlighting
     // is applied afterwards via chart.update() on the existing instance, never by
@@ -2022,6 +2102,8 @@ function App(){
       canvas.addEventListener("mousedown",onPointerDown);
       canvas.addEventListener("mousemove",onPointerMove);
 
+      if(typeof Chart==="undefined"){ return; }
+      try{
       chartRef.current=new Chart(ctx,{
         type:"line",
         data:{labels:allX,datasets:datasets},
@@ -2121,6 +2203,7 @@ function App(){
           }
         }
       });
+      }catch(err){ try{console.warn("Chart error",err);}catch(e){} }
 
       return function(){
         canvas.removeEventListener("touchstart",onPointerDown);
