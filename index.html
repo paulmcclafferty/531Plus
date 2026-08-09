@@ -1405,7 +1405,7 @@ function Settings(p){
         h("button",{className:"btn btn-gold",style:{width:"100%",marginTop:16,marginBottom:4},onClick:save},"Save Settings"),
 
         // Data & Backup
-        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.8.4 · Aug 2026"),
+        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.8.5 · Aug 2026"),
         h(SectionHeader,{name:"backup",title:"Data & Backup",subtitle:"Export, import, CSV"}),
         openSection==="backup"&&h("div",{style:{paddingBottom:6,paddingTop:4}},
           h("div",{className:"flex-row",style:{flexWrap:"wrap"}},
@@ -1653,25 +1653,51 @@ function App(){
     var msLog=getMainSets(st.cfg.variant,st.week);
     var topIdx=msLog.length-1;
     var ak="w"+st.week+"d"+st.day+"s"+topIdx;
-    // Respect any long-press weight override on the AMRAP set — what you actually
-    // loaded the bar with is what should get logged and used for the e1RM calc,
-    // not the unedited calculated number.
     var topWt=(st.weightOverrides&&st.weightOverrides[ak]!==undefined)?st.weightOverrides[ak]:r5(tm*msLog[topIdx].pct);
     var ar=parseInt(st.amraps[ak])||0;
     var est=ar>0?epley(topWt,ar):null;
-    if(est){
-      setSt(function(p){
-        var prs=Object.assign({},p.prs);
-        prs[lift]=(prs[lift]||[]).concat([{cycle:p.cycle,week:p.week,est:est,tm:tm,topWt:topWt,amrap:ar,date:new Date().toLocaleDateString()}]);
-        return Object.assign({},p,{prs:prs});
-      });
-    }
-    var entry={id:Date.now(),date:new Date().toLocaleDateString(),cycle:st.cycle,week:st.week,day:st.day,lift:LIFT_LABELS[lift],topSet:toDisp(topWt,st.cfg.unit)+toLbl(st.cfg.unit),amrap:ar||"—",notes:st.notes["w"+st.week+"d"+st.day]||""};
-    // Log only — do not advance day. User returns to home; they choose next session.
-    var entryId = entry.id;
-    setSt(function(p){return Object.assign({},p,{history:[entry].concat(p.history),current:{cycle:p.cycle,week:p.week,day:p.day}});});
-    setUndoToast({id:entryId,label:entry.lift+" logged"});
+    var noteVal=st.notes["w"+st.week+"d"+st.day]||"";
+    var isEdit = !!(editingHist&&editingHist.id);
+    var entryDate = isEdit&&editingHist.date ? editingHist.date : new Date().toLocaleDateString();
+    var entryId = isEdit ? editingHist.id : Date.now();
+    var entry={id:entryId,date:entryDate,cycle:st.cycle,week:st.week,day:st.day,lift:LIFT_LABELS[lift],topSet:toDisp(topWt,st.cfg.unit)+toLbl(st.cfg.unit),amrap:ar||"—",notes:noteVal};
+
+    setSt(function(p){
+      var prs=Object.assign({},p.prs);
+      if(est){
+        var list=(prs[lift]||[]).slice();
+        var found=false;
+        for(var i=0;i<list.length;i++){
+          if(list[i].cycle===p.cycle && list[i].week===p.week){
+            list[i]=Object.assign({},list[i],{est:est,tm:tm,topWt:topWt,amrap:ar,date:entryDate});
+            found=true; break;
+          }
+        }
+        if(!found) list=list.concat([{cycle:p.cycle,week:p.week,est:est,tm:tm,topWt:topWt,amrap:ar,date:entryDate}]);
+        prs[lift]=list;
+      }
+      var history;
+      if(isEdit){
+        history=p.history.map(function(h){ return h.id===entryId ? Object.assign({},h,entry) : h; });
+      } else {
+        history=[entry].concat(p.history);
+      }
+      var patch={history:history, prs:prs, current:{cycle:p.cycle,week:p.week,day:p.day}};
+      // Restore live program position after editing a past session
+      if(isEdit && editingHist){
+        patch.cycle = editingHist.returnCycle;
+        patch.week = editingHist.returnWeek;
+        patch.day = editingHist.returnDay;
+      }
+      return Object.assign({},p,patch);
+    });
+    setUndoToast({id:entryId,label:isEdit ? (entry.lift+" updated") : (entry.lift+" logged")});
     setTimeout(function(){setUndoToast(function(t){return t&&t.id===entryId?null:t;});},8000);
+    if(isEdit){
+      setEditingHist(null);
+      setTab("history");
+      return;
+    }
     // Auto-backup to device Downloads so history survives clearing site data
     try{
       if(st.cfg.autoBackup!==false){
@@ -1931,9 +1957,15 @@ function App(){
 
   // ── WORKOUT TAB ──────────────────────────────────────────────────────────
   var workoutContent=h("div",null,
+    editingHist&&h("div",{style:{background:"rgba(255,215,0,0.12)",border:"1px solid var(--gold)",borderRadius:10,padding:"10px 12px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}},
+      h("div",{style:{fontSize:13,fontWeight:700,color:"var(--gold)"}},"Editing logged workout",
+        editingHist.date?h("span",{style:{fontWeight:500,color:"var(--muted)",marginLeft:8}},editingHist.date):null
+      ),
+      h("button",{className:"btn btn-ghost btn-sm",onClick:cancelHistoryEdit},"Cancel")
+    ),
     // Nav
     h("div",{className:"flex-row",style:{marginBottom:8}},
-      h("button",{className:"btn btn-ghost btn-sm",onClick:goBack},"< Back"),
+      h("button",{className:"btn btn-ghost btn-sm",onClick:function(){ if(editingHist) cancelHistoryEdit(); else goBack(); }},editingHist?"Cancel":"< Back"),
       [1,2,3,4].map(function(w){return h("button",{key:w,className:"sel-btn"+(st.week===w?" active":""),onClick:function(){setSt(function(p){return Object.assign({},p,{week:w,day:0});});}},w===4?"DL":"Wk"+w);}),
       h("button",{className:"btn btn-ghost btn-sm",style:{color:"var(--blue)",borderColor:"var(--blue)"},onClick:jumpToAnchor},"Today"),
       h("button",{className:"sel-btn",style:{color:"var(--green)",borderColor:"var(--green)",marginLeft:"auto"},onClick:advanceWeek},"Advance >")
@@ -2234,7 +2266,7 @@ function App(){
         })
       ),
       h("div",{style:{display:"flex",justifyContent:"flex-end",marginTop:4}},
-        h("button",{className:"btn btn-green",disabled:logBusy,onClick:function(){if(logBusy)return;setLogBusy(true);logWorkout();setTimeout(function(){setLogBusy(false);},800);}},logBusy?"Logging…":"Log & Exit")
+        h("button",{className:"btn btn-green",disabled:logBusy,onClick:function(){if(logBusy)return;setLogBusy(true);logWorkout();setTimeout(function(){setLogBusy(false);},800);}},logBusy?"Saving…":(editingHist?"Save changes":"Log & Exit"))
       )
     )
     )
@@ -2770,7 +2802,7 @@ function App(){
                         h("button",{className:"btn btn-red btn-sm",onClick:function(){deleteHistoryEntry(e.id);}},"Yes, delete"),
                         h("button",{className:"btn btn-ghost btn-sm",onClick:function(){setHistDeleteConfirm(null);}},"Cancel"))
                     :h("div",{style:{display:"flex",gap:8}},
-                        h("button",{className:"btn btn-outline btn-sm",style:{fontSize:11},onClick:function(ev){ev.stopPropagation();setHistEdit({id:e.id,topSet:e.topSet,amrap:e.amrap,notes:e.notes||"",date:e.date});}},"Edit"),
+                        h("button",{className:"btn btn-outline btn-sm",style:{fontSize:11},onClick:function(ev){ev.stopPropagation();openHistoryWorkout(e);}},"Edit workout"),
                         h("button",{className:"btn btn-ghost btn-sm",style:{color:"var(--red)",borderColor:"var(--red)",fontSize:11},onClick:function(ev){ev.stopPropagation();setHistDeleteConfirm(e.id);}},"Delete")
                       )
                 )
