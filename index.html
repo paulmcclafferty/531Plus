@@ -1647,6 +1647,85 @@ function App(){
   function setWodScale(k,v){setSt(function(p){var w=Object.assign({},p.wodScale);w[k]=v;return Object.assign({},p,{wodScale:w});});}
   function setExHistory(fn){setSt(function(p){return Object.assign({},p,{exHistory:fn(p.exHistory||{})});});}
 
+  function openHistoryWorkout(e){
+    var liftKey = null;
+    if(e.day!=null && e.day>=0 && e.day<LIFTS.length) liftKey = LIFTS[e.day];
+    if(!liftKey && e.lift){
+      var low = String(e.lift).toLowerCase();
+      if(low.indexOf("dead")>=0) liftKey="deadlift";
+      else if(low.indexOf("squat")>=0) liftKey="squat";
+      else if(low.indexOf("bench")>=0) liftKey="bench";
+      else if(low.indexOf("press")>=0||low.indexOf("ohp")>=0||low.indexOf("military")>=0) liftKey="press";
+    }
+    var dayIdx = 0;
+    var order = normalizeDayOrder(st.cfg.dayOrder);
+    if(liftKey){
+      var found = order.indexOf(liftKey);
+      if(found>=0) dayIdx = found;
+      else if(e.day!=null) dayIdx = Math.min(e.day, order.length-1);
+    } else if(e.day!=null) dayIdx = Math.min(e.day, order.length-1);
+
+    var week = e.week!=null ? e.week : st.week;
+    var cycle = e.cycle!=null ? e.cycle : st.cycle;
+    var topIdx = getMainSets(st.cfg.variant, week).length - 1;
+    var ak = "w"+week+"d"+dayIdx+"s"+topIdx;
+    var noteKey = "w"+week+"d"+dayIdx;
+
+    var topWtKg = null;
+    if(e.topSet){
+      var m = String(e.topSet).match(/([0-9]+(?:\.[0-9]+)?)/);
+      if(m){
+        var val = parseFloat(m[1]);
+        if(!isNaN(val)){
+          if(/lb/i.test(String(e.topSet))) topWtKg = fromDisp(val, "lbs");
+          else topWtKg = fromDisp(val, st.cfg.unit||"kg");
+        }
+      }
+    }
+    var ar = (e.amrap && e.amrap!=="—") ? String(e.amrap) : "";
+
+    setEditingHist({
+      id: e.id,
+      returnCycle: st.cycle,
+      returnWeek: st.week,
+      returnDay: st.day,
+      date: e.date||""
+    });
+    setSt(function(p){
+      var amraps = Object.assign({}, p.amraps);
+      var notes = Object.assign({}, p.notes);
+      var weightOverrides = Object.assign({}, p.weightOverrides||{});
+      var checks = Object.assign({}, p.checks);
+      if(ar) amraps[ak] = ar;
+      if(e.notes) notes[noteKey] = e.notes;
+      if(topWtKg!=null && topWtKg>0) weightOverrides[ak] = rndW(topWtKg, "kg");
+      var ms = getMainSets(p.cfg.variant, week);
+      for(var si=0; si<ms.length; si++){
+        checks["w"+week+"d"+dayIdx+"s"+si+"_done"] = true;
+      }
+      return Object.assign({}, p, {
+        cycle: cycle,
+        week: week,
+        day: dayIdx,
+        amraps: amraps,
+        notes: notes,
+        weightOverrides: weightOverrides,
+        checks: checks
+      });
+    });
+    setTab("workout");
+    setHistExpanded(null);
+    setHistEdit(null);
+  }
+
+  function cancelHistoryEdit(){
+    if(!editingHist){ setTab("history"); return; }
+    var rc=editingHist.returnCycle, rw=editingHist.returnWeek, rd=editingHist.returnDay;
+    setEditingHist(null);
+    setSt(function(p){ return Object.assign({}, p, {cycle:rc, week:rw, day:rd}); });
+    setTab("history");
+  }
+
   function logWorkout(){
     var lift=dayLift(st.cfg,st.day);
     var tm=st.tms[lift]||0;
@@ -1737,6 +1816,7 @@ function App(){
   var histDeleteState=useState(null); var histDeleteConfirm=histDeleteState[0],setHistDeleteConfirm=histDeleteState[1];
   var histEditState=useState(null); var histEdit=histEditState[0],setHistEdit=histEditState[1];
   var prResetState=useState(null); var prResetLift=prResetState[0],setPrResetLift=prResetState[1];
+  var editingHistState=useState(null); var editingHist=editingHistState[0],setEditingHist=editingHistState[1];
 
   if(!st.setupDone)return h(Wizard,{
     onComplete:completeSetup,
