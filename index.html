@@ -629,7 +629,7 @@ var DEFAULT={
   cfg:{variant:"original",accStyle:"crossfit",unit:"kg",deloadEvery7:false,warmup:true,joker:false,restSecs:180,timerOnWarmup:false,jokerAfterAmrap:false,incLower:5,incUpper:2.5,focusMode:false,dayOrder:["squat","bench","deadlift","press"],autoBackup:true},
   tms:{},week:1,day:0,cycle:1,totalWeeks:0,
   current:{cycle:1,week:1,day:0}, // true "where you should train next" — only logWorkout/advanceWeek touch this
-  amraps:{},checks:{},notes:{},wodScale:{},jokerCounts:{},weightOverrides:{},
+  amraps:{},checks:{},notes:{},hiddenAcc:{},wodScale:{},jokerCounts:{},weightOverrides:{},
   history:[],prs:{},bwLog:[],exHistory:{},
   customAcc:{squat:[],bench:[],deadlift:[],press:[]},
 };
@@ -845,23 +845,49 @@ function WeightEditPopover(props){
   var value=props.value, unit=props.unit, onConfirm=props.onConfirm, onCancel=props.onCancel;
   var valState=useState(String(value)); var val=valState[0],setVal=valState[1];
   var inputRef=useRef();
+  // 2.5 kg steps; 5 lb if unit looks like pounds
+  var step = (String(unit||"").toLowerCase().indexOf("lb")>=0) ? 5 : 2.5;
   useEffect(function(){ if(inputRef.current){inputRef.current.focus();inputRef.current.select();} },[]);
+  function nudge(dir){
+    var v=parseFloat(val);
+    if(isNaN(v)) v=parseFloat(value)||0;
+    v = Math.round((v + dir*step)*1000)/1000;
+    if(v<0) v=0;
+    setVal(String(v));
+  }
+  function apply(){
+    var v=parseFloat(val);
+    if(!isNaN(v)&&v>0) onConfirm(v);
+  }
   return h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:20},onClick:onCancel},
-    h("div",{className:"card",style:{maxWidth:280,width:"100%"},onClick:function(e){e.stopPropagation();}},
+    h("div",{className:"card",style:{maxWidth:320,width:"100%"},onClick:function(e){e.stopPropagation();}},
       h("div",{style:{fontWeight:700,fontSize:14,marginBottom:4}},"Edit weight"),
-      h("p",{style:{color:"var(--muted)",fontSize:11,marginBottom:12}},"This change applies to this set and cascades forward to all later sets in this group."),
-      h("div",{style:{display:"flex",gap:8,alignItems:"center",marginBottom:14}},
-        h("input",{ref:inputRef,className:"inp",type:"number",inputMode:"decimal",value:val,style:{fontSize:20,fontWeight:700,textAlign:"center"},
-          onChange:function(e){setVal(e.target.value);},
-          onKeyDown:function(e){if(e.key==="Enter"){var v=parseFloat(val);if(!isNaN(v)&&v>0)onConfirm(v);}}}),
-        h("span",{style:{color:"var(--muted)",fontWeight:700}},unit)
+      h("p",{style:{color:"var(--muted)",fontSize:11,marginBottom:14}},"− / + adjusts by "+step+unit+". Or type any weight. Cascades to later sets in this group."),
+      h("div",{style:{display:"flex",gap:10,alignItems:"center",marginBottom:16}},
+        h("button",{
+          type:"button",
+          className:"btn btn-outline",
+          style:{minWidth:56,minHeight:56,fontSize:28,fontWeight:900,padding:0,flexShrink:0},
+          onClick:function(){ nudge(-1); }
+        },"−"),
+        h("div",{style:{flex:1,display:"flex",alignItems:"center",gap:6}},
+          h("input",{ref:inputRef,className:"inp",type:"number",inputMode:"decimal",value:val,
+            style:{fontSize:24,fontWeight:800,textAlign:"center",minHeight:56},
+            onChange:function(e){setVal(e.target.value);},
+            onKeyDown:function(e){if(e.key==="Enter") apply();}
+          }),
+          h("span",{style:{color:"var(--muted)",fontWeight:700,fontSize:14}},unit)
+        ),
+        h("button",{
+          type:"button",
+          className:"btn btn-outline",
+          style:{minWidth:56,minHeight:56,fontSize:28,fontWeight:900,padding:0,flexShrink:0},
+          onClick:function(){ nudge(1); }
+        },"+")
       ),
       h("div",{style:{display:"flex",gap:8}},
         h("button",{className:"btn btn-ghost",style:{flex:1,justifyContent:"center"},onClick:onCancel},"Cancel"),
-        h("button",{className:"btn btn-gold",style:{flex:1,justifyContent:"center"},onClick:function(){
-          var v=parseFloat(val);
-          if(!isNaN(v)&&v>0) onConfirm(v);
-        }},"Apply")
+        h("button",{className:"btn btn-gold",style:{flex:1,justifyContent:"center"},onClick:apply},"Apply")
       )
     )
   );
@@ -1405,7 +1431,7 @@ function Settings(p){
         h("button",{className:"btn btn-gold",style:{width:"100%",marginTop:16,marginBottom:4},onClick:save},"Save Settings"),
 
         // Data & Backup
-        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.8.5 · Aug 2026"),
+        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.10 · Aug 2026"),
         h(SectionHeader,{name:"backup",title:"Data & Backup",subtitle:"Export, import, CSV"}),
         openSection==="backup"&&h("div",{style:{paddingBottom:6,paddingTop:4}},
           h("div",{className:"flex-row",style:{flexWrap:"wrap"}},
@@ -1438,6 +1464,7 @@ function App(){
     if(!saved.notes) saved.notes={};
     if(!saved.bwLog) saved.bwLog=[];
     if(!saved.customAcc) saved.customAcc={squat:[],bench:[],deadlift:[],press:[]};
+    if(!saved.hiddenAcc) saved.hiddenAcc={};
     if(saved.day==null||saved.day<0) saved.day=0;
     if(saved.week==null) saved.week=1;
     if(saved.cycle==null) saved.cycle=1;
@@ -1647,7 +1674,42 @@ function App(){
   function setWodScale(k,v){setSt(function(p){var w=Object.assign({},p.wodScale);w[k]=v;return Object.assign({},p,{wodScale:w});});}
   function setExHistory(fn){setSt(function(p){return Object.assign({},p,{exHistory:fn(p.exHistory||{})});});}
 
-  function openHistoryWorkout(e){
+  function addExerciseToLift(liftKey, name, detail){
+    var n=String(name||"").trim();
+    if(!n) return;
+    setSt(function(p){
+      var ca=Object.assign({},p.customAcc||{});
+      var list=(ca[liftKey]||[]).slice();
+      list.push({name:n, detail:String(detail||"").trim(), sets:""});
+      ca[liftKey]=list;
+      return Object.assign({},p,{customAcc:ca});
+    });
+  }
+  function removeExerciseFromLift(liftKey, index){
+    setSt(function(p){
+      var ca=Object.assign({},p.customAcc||{});
+      var list=(ca[liftKey]||[]).slice();
+      list.splice(index,1);
+      ca[liftKey]=list;
+      return Object.assign({},p,{customAcc:ca});
+    });
+  }
+  function hideBuiltinAcc(key){
+    setSt(function(p){
+      var hidden=Object.assign({},p.hiddenAcc||{});
+      hidden[key]=true;
+      return Object.assign({},p,{hiddenAcc:hidden});
+    });
+  }
+  function showBuiltinAcc(key){
+    setSt(function(p){
+      var hidden=Object.assign({},p.hiddenAcc||{});
+      delete hidden[key];
+      return Object.assign({},p,{hiddenAcc:hidden});
+    });
+  }
+
+    function openHistoryWorkout(e){
     var liftKey = null;
     if(e.day!=null && e.day>=0 && e.day<LIFTS.length) liftKey = LIFTS[e.day];
     if(!liftKey && e.lift){
@@ -1817,6 +1879,8 @@ function App(){
   var histEditState=useState(null); var histEdit=histEditState[0],setHistEdit=histEditState[1];
   var prResetState=useState(null); var prResetLift=prResetState[0],setPrResetLift=prResetState[1];
   var editingHistState=useState(null); var editingHist=editingHistState[0],setEditingHist=editingHistState[1];
+  var newExState=useState(""); var newExName=newExState[0],setNewExName=newExState[1];
+  var newExDetState=useState(""); var newExDet=newExDetState[0],setNewExDet=newExDetState[1];
 
   if(!st.setupDone)return h(Wizard,{
     onComplete:completeSetup,
@@ -2077,8 +2141,11 @@ function App(){
     !tm?h("div",{className:"card"},h("p",{style:{color:"var(--muted)",textAlign:"center",padding:20}},"Open Settings to set training maxes.")):
     h("div",null,
       // CF Jumps - PRE LIFT (before main lift)
-      !focusMode&&st.cfg.accStyle==="crossfit"&&h("div",{className:"card"},
-        h("div",{className:"section-title"},"Jumps ",h("span",{className:"tag"},"PRE-LIFT")),
+      !focusMode&&st.cfg.accStyle==="crossfit"&&!(st.hiddenAcc&&st.hiddenAcc[lift+"_jumps"])&&h("div",{className:"card"},
+        h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}},
+          h("div",{className:"section-title",style:{margin:0}},"Jumps ",h("span",{className:"tag"},"PRE-LIFT")),
+          h("button",{className:"btn btn-ghost btn-sm",style:{color:"var(--red)",fontSize:11},onClick:function(){ hideBuiltinAcc(lift+"_jumps"); }},"Remove")
+        ),
         h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}},
           h("div",null,h("div",{style:{fontWeight:600,fontSize:14}},CF_ACC[lift].jumps.name),h("div",{style:{color:"var(--muted)",fontSize:12,marginTop:3}},CF_ACC[lift].jumps.detail)),
           h("div",{className:"circle-btn"+(st.checks[sk+"_jump_pre"]?" done":""),onClick:function(){setCheck(sk+"_jump_pre",!st.checks[sk+"_jump_pre"]);}},st.checks[sk+"_jump_pre"]?"\u2713":"")
@@ -2332,18 +2399,52 @@ function App(){
         })
       ),
       // Custom accessories
-      !focusMode&&st.cfg.accStyle==="custom"&&(st.customAcc[lift]||[]).length>0&&h("div",{className:"card"},
-        h("div",{className:"section-title"},"Accessories ",h("span",{className:"tag",style:{background:"rgba(41,128,185,.15)",color:"var(--blue)"}},"CUSTOM")),
+      !focusMode&&h("div",{className:"card"},
+        h("div",{className:"section-title"},"My exercises ",
+          h("span",{className:"tag",style:{background:"rgba(255,215,0,.12)",color:"var(--gold)"}},"SAVED")
+        ),
+        h("p",{style:{fontSize:11,color:"var(--muted)",marginBottom:10}},"Add or remove accessories for "+LIFT_LABELS[lift]+". Saved for every future "+LIFT_LABELS[lift]+" day."),
+        (st.customAcc[lift]||[]).length===0&&h("div",{style:{fontSize:13,color:"var(--muted)",marginBottom:10}},"None yet — add one below."),
         (st.customAcc[lift]||[]).map(function(ex,i){
+          var label=typeof ex==="string"?ex:(ex&&ex.name)||"Exercise";
           var ck=sk+"_cust"+i;
-          return h("div",{key:i,style:{paddingBottom:10,marginBottom:10,borderBottom:i<st.customAcc[lift].length-1?"1px solid var(--border)":"none"}},
-            h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}},
-              h("div",{style:{fontWeight:600,fontSize:14}},ex),
-              h("div",{className:"circle-btn"+(st.checks[ck]?" done":""),onClick:function(){setCheck(ck,!st.checks[ck]);}},st.checks[ck]?"\u2713":"")
+          return h("div",{key:i,style:{paddingBottom:10,marginBottom:10,borderBottom:"1px solid var(--border)"}},
+            h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}},
+              h("div",{style:{fontWeight:600,fontSize:14,flex:1}},label),
+              h("div",{className:"circle-btn"+(st.checks[ck]?" done":""),onClick:function(){setCheck(ck,!st.checks[ck]);}},st.checks[ck]?"✓":""),
+              h("button",{
+                className:"btn btn-ghost btn-sm",
+                style:{color:"var(--red)",borderColor:"var(--red)",minWidth:36,padding:"6px 10px"},
+                onClick:function(){ removeExerciseFromLift(lift,i); }
+              },"×")
             ),
-            h(ExNotes,{exKey:sk+"_cust"+i,label:ex,notes:st.notes,onNoteChange:setNote,exHistory:st.exHistory||{},setExHistory:setExHistory})
+            h(ExNotes,{exKey:sk+"_cust"+i,label:label,notes:st.notes,onNoteChange:setNote,exHistory:st.exHistory||{},setExHistory:setExHistory})
           );
-        })
+        }),
+        h("div",{style:{marginTop:8,display:"flex",flexDirection:"column",gap:8}},
+          h("input",{
+            className:"inp",
+            placeholder:"Exercise name (e.g. Face pulls)",
+            value:newExName,
+            onChange:function(e){ setNewExName(e.target.value); }
+          }),
+          h("input",{
+            className:"inp",
+            placeholder:"Optional detail (e.g. 3×15)",
+            value:newExDet,
+            onChange:function(e){ setNewExDet(e.target.value); }
+          }),
+          h("button",{
+            className:"btn btn-outline",
+            style:{width:"100%"},
+            onClick:function(){
+              if(!String(newExName||"").trim()) return;
+              addExerciseToLift(lift, newExName, newExDet);
+              setNewExName("");
+              setNewExDet("");
+            }
+          },"+ Add exercise")
+        )
       ),
       h("div",{style:{display:"flex",justifyContent:"flex-end",marginTop:4}},
         h("button",{className:"btn btn-green",disabled:logBusy,onClick:function(){if(logBusy)return;setLogBusy(true);logWorkout();setTimeout(function(){setLogBusy(false);},800);}},logBusy?"Saving…":(editingHist?"Save changes":"Log & Exit"))
@@ -2382,8 +2483,8 @@ function App(){
     var canvasRef=useRef();
     var chartRef=useRef();
     var selState=useState(null); var selectedLift=selState[0],setSelectedLift=selState[1];
-    var selPtState=useState(null); var selectedPoint=selPtState[0],setSelectedPoint=selPtState[1];
-    var dragRef=useRef({moved:false,startX:0,startY:0}); // tracks whether the current pointer gesture was a drag, so we can ignore the click it fires on release
+    var idxState=useState(0); var pointIdx=idxState[0],setPointIdx=idxState[1];
+    var stripRef=useRef();
 
     function buildNorm(){
       var ns=(series||[]).map(function(s){
@@ -2393,7 +2494,9 @@ function App(){
           data:(s.data||[]).map(function(d){
             var key=toISODateKey(d.x);
             return {x:key, y:d.y};
-          }).filter(function(d){return d.x;})
+          }).filter(function(d){return d.x;}).sort(function(a,b){
+            return (parseDateMs(a.x)||0)-(parseDateMs(b.x)||0);
+          })
         };
       });
       var xs=[];
@@ -2415,224 +2518,268 @@ function App(){
     var normSeries=built.normSeries;
     var allX=built.allX;
 
-    // Build the chart ONCE per actual data change (series/unit). Selection highlighting
-    // is applied afterwards via chart.update() on the existing instance, never by
-    // destroying and recreating the canvas — that full rebuild mid-drag was what made
-    // panning feel like it "refreshed" on every finger movement.
+    var activeSer = null;
+    if(selectedLift){
+      for(var i=0;i<normSeries.length;i++){
+        if(normSeries[i].label===selectedLift){ activeSer=normSeries[i]; break; }
+      }
+    }
+    var points = activeSer ? activeSer.data : [];
+    if(pointIdx>=points.length && points.length>0) {
+      // clamp after lift switch — set in effect below
+    }
+    var selectedPoint = (points.length && pointIdx>=0 && pointIdx<points.length)
+      ? {lift:selectedLift, x:points[pointIdx].x, y:points[pointIdx].y}
+      : null;
+
+    function selectLift(label){
+      if(selectedLift===label){
+        setSelectedLift(null);
+        setPointIdx(0);
+        return;
+      }
+      setSelectedLift(label);
+      var ser=null;
+      for(var i=0;i<normSeries.length;i++){
+        if(normSeries[i].label===label){ ser=normSeries[i]; break; }
+      }
+      // Start on most recent point
+      setPointIdx(ser&&ser.data.length ? ser.data.length-1 : 0);
+    }
+
+    function stepPoint(delta){
+      if(!points.length) return;
+      var n = pointIdx + delta;
+      if(n<0) n=0;
+      if(n>points.length-1) n=points.length-1;
+      setPointIdx(n);
+      // Scroll strip card into view
+      try{
+        var el = stripRef.current && stripRef.current.querySelector('[data-pt="'+n+'"]');
+        if(el&&el.scrollIntoView) el.scrollIntoView({behavior:"smooth", inline:"center", block:"nearest"});
+      }catch(e){}
+    }
+
     useEffect(function(){
       if(!canvasRef.current) return;
+      if(typeof Chart==="undefined") return;
 
+      var focus = selectedLift;
       var datasets=normSeries.filter(function(s){return s.data.length>0;}).map(function(ser){
         var dataMap={};
         ser.data.forEach(function(d){dataMap[d.x]=d.y;});
         var dataArr=allX.map(function(x){return dataMap.hasOwnProperty(x)?dataMap[x]:null;});
+        var isFocus = !focus || ser.label===focus;
+        var isDim = focus && ser.label!==focus;
         return {
           label:ser.label,
           data:dataArr,
-          borderColor:ser.color,
-          backgroundColor:ser.color+"33",
-          pointBackgroundColor:ser.color,
-          pointBorderColor:"#0d0d0d",
-          pointBorderWidth:2,
-          pointRadius:5,
-          pointHoverRadius:9,
-          borderWidth:2.5,
+          borderColor:isDim ? ser.color+"40" : ser.color,
+          backgroundColor:ser.color+(isDim?"10":"33"),
+          pointBackgroundColor:dataArr.map(function(v,i){
+            if(v===null) return "transparent";
+            if(focus && ser.label===focus && selectedPoint && allX[i]===selectedPoint.x) return "#fff";
+            return isDim ? ser.color+"50" : ser.color;
+          }),
+          pointBorderColor:dataArr.map(function(v,i){
+            if(v===null) return "transparent";
+            if(focus && ser.label===focus && selectedPoint && allX[i]===selectedPoint.x) return ser.color;
+            return "#0d0d0d";
+          }),
+          pointBorderWidth:dataArr.map(function(v,i){
+            if(focus && ser.label===focus && selectedPoint && allX[i]===selectedPoint.x) return 3;
+            return 2;
+          }),
+          pointRadius:dataArr.map(function(v,i){
+            if(v===null) return 0;
+            if(focus && ser.label===focus && selectedPoint && allX[i]===selectedPoint.x) return 9;
+            return isDim ? 3 : 5;
+          }),
+          pointHoverRadius:8,
+          borderWidth:isFocus?2.5:1.5,
           tension:0.25,
           fill:false,
           spanGaps:true,
-          order:1,
+          order:isFocus?0:1
         };
       });
 
-      if(chartRef.current){ chartRef.current.destroy(); }
+      if(chartRef.current){ try{ chartRef.current.destroy(); }catch(e){} chartRef.current=null; }
 
-      var ctx=canvasRef.current.getContext("2d");
-      var canvas=canvasRef.current;
-
-      // Manual drag tracking so we can tell a real pan gesture apart from a tap,
-      // independent of whatever Chart.js's own click event decides to fire on release.
-      function onPointerDown(e){
-        var pt=e.touches?e.touches[0]:e;
-        dragRef.current={moved:false,startX:pt.clientX,startY:pt.clientY};
-      }
-      function onPointerMove(e){
-        var pt=e.touches?e.touches[0]:e;
-        var dx=Math.abs(pt.clientX-dragRef.current.startX);
-        var dy=Math.abs(pt.clientY-dragRef.current.startY);
-        if(dx>6||dy>6) dragRef.current.moved=true;
-      }
-      canvas.addEventListener("touchstart",onPointerDown,{passive:true});
-      canvas.addEventListener("touchmove",onPointerMove,{passive:true});
-      canvas.addEventListener("mousedown",onPointerDown);
-      canvas.addEventListener("mousemove",onPointerMove);
-
-      if(typeof Chart==="undefined"){ return; }
       try{
-      chartRef.current=new Chart(ctx,{
-        type:"line",
-        data:{labels:allX,datasets:datasets},
-        options:{
-          responsive:true,
-          maintainAspectRatio:false,
-          interaction:{mode:"index",intersect:false},
-          onClick:function(evt,elements,chart){
-            // Ignore the click Chart.js fires immediately after a pan/drag release —
-            // only treat genuine taps (no movement) as point/series selection.
-            if(dragRef.current.moved) return;
-            if(elements&&elements.length>0){
-              var el=elements[0];
-              var ds=chart.data.datasets[el.datasetIndex];
-              var lbl=chart.data.labels[el.index];
-              var clickedLift=ds.label;
-              var clickedSame=selectedPoint&&selectedPoint.lift===clickedLift&&selectedPoint.x===lbl;
-              if(clickedSame){
-                setSelectedPoint(null);
-                setSelectedLift(null);
-              } else {
-                setSelectedPoint({lift:clickedLift,x:lbl,y:ds.data[el.index]});
-                setSelectedLift(clickedLift);
-              }
-            } else {
-              setSelectedPoint(null);
-              setSelectedLift(null);
-            }
-          },
-          plugins:{
-            legend:{
-              labels:{color:"#e8e8ea",font:{size:12,weight:"600"},usePointStyle:true,pointStyle:"circle"},
-              onClick:function(evt,legendItem,legend){
-                var lbl=legendItem.text;
-                if(selectedLift===lbl){
-                  setSelectedLift(null);
-                  setSelectedPoint(null);
-                } else {
-                  setSelectedLift(lbl);
-                  setSelectedPoint(null);
+        chartRef.current=new Chart(canvasRef.current.getContext("2d"),{
+          type:"line",
+          data:{labels:allX, datasets:datasets},
+          options:{
+            responsive:true,
+            maintainAspectRatio:false,
+            animation:false,
+            interaction:{mode:"nearest", axis:"x", intersect:false},
+            plugins:{
+              legend:{display:false},
+              tooltip:{
+                enabled:true,
+                callbacks:{
+                  title:function(items){
+                    if(!items||!items.length) return "";
+                    return formatAxisDate(items[0].label||items[0].parsed&&items[0].parsed.x);
+                  },
+                  label:function(ctx){
+                    if(ctx.parsed.y==null) return null;
+                    return ctx.dataset.label+": "+ctx.parsed.y+unit;
+                  }
                 }
-              }
-            },
-            tooltip:{
-              backgroundColor:"#1c1c1e",
-              titleColor:"#ffd700",
-              bodyColor:"#e8e8ea",
-              borderColor:"#2c2c2e",
-              borderWidth:1,
-              padding:12,
-              titleFont:{size:13,weight:"700"},
-              bodyFont:{size:13},
-              callbacks:{
-                label:function(ctx){
-                  var v=ctx.parsed.y;
-                  if(v===null||v===undefined) return null;
-                  return " "+ctx.dataset.label+": "+v+unit+" e1RM";
-                }
-              }
-            },
-            zoom:{
-              pan:{enabled:true,mode:"x",modifierKey:null,onPanStart:function(){dragRef.current.moved=true;}},
+              },
               zoom:{
-                wheel:{enabled:true},
-                pinch:{enabled:true},
-                mode:"x",
-                drag:{enabled:false}
-              },
-              limits:{x:{minRange:3}}
-            }
-          },
-          scales:{
-            x:{
-              ticks:{
-                color:"#6b6b6e",
-                font:{size:10},
-                maxRotation:45,
-                minRotation:0,
-                autoSkip:true,
-                maxTicksLimit:8,
-                callback:function(val, idx){
-                  var label=null;
-                  try{
-                    if(typeof val==="string"&&val.indexOf("-")>=0) label=val;
-                    else if(this.getLabelForValue) label=this.getLabelForValue(val);
-                  }catch(e){}
-                  if(!label) label=allX[idx]||allX[val]||"";
-                  return formatAxisDate(label);
-                }
-              },
-              grid:{color:"#222"}
+                pan:{enabled:true, mode:"x", modifierKey:null},
+                zoom:{wheel:{enabled:true}, pinch:{enabled:true}, mode:"x"}
+              }
             },
-            y:{
-              ticks:{color:"#6b6b6e",font:{size:11},callback:function(v){return v+unit;}},
-              grid:{color:"#222"}
+            scales:{
+              x:{
+                ticks:{
+                  color:"#6b6b6e",
+                  font:{size:10},
+                  maxRotation:45,
+                  autoSkip:true,
+                  maxTicksLimit:6,
+                  callback:function(val, idx){
+                    var label=null;
+                    try{
+                      if(typeof val==="string") label=val;
+                      else if(this.getLabelForValue) label=this.getLabelForValue(val);
+                    }catch(e){}
+                    if(!label) label=allX[idx]||allX[val]||"";
+                    return formatAxisDate(label);
+                  }
+                },
+                grid:{color:"#222"}
+              },
+              y:{
+                ticks:{color:"#6b6b6e", font:{size:10}, callback:function(v){return v+unit;}},
+                grid:{color:"#222"}
+              }
+            },
+            onClick:function(evt, elements){
+              if(!elements||!elements.length) return;
+              var el=elements[0];
+              var ds=chartRef.current.data.datasets[el.datasetIndex];
+              var lbl=allX[el.index];
+              var val=ds.data[el.index];
+              if(val==null) return;
+              setSelectedLift(ds.label);
+              // find index in that lift's own series
+              var ser=null;
+              for(var i=0;i<normSeries.length;i++){
+                if(normSeries[i].label===ds.label){ ser=normSeries[i]; break; }
+              }
+              if(ser){
+                for(var j=0;j<ser.data.length;j++){
+                  if(ser.data[j].x===lbl){ setPointIdx(j); break; }
+                }
+              }
             }
           }
-        }
-      });
+        });
       }catch(err){ try{console.warn("Chart error",err);}catch(e){} }
 
       return function(){
-        canvas.removeEventListener("touchstart",onPointerDown);
-        canvas.removeEventListener("touchmove",onPointerMove);
-        canvas.removeEventListener("mousedown",onPointerDown);
-        canvas.removeEventListener("mousemove",onPointerMove);
-        if(chartRef.current){ chartRef.current.destroy(); chartRef.current=null; }
+        if(chartRef.current){ try{ chartRef.current.destroy(); }catch(e){} chartRef.current=null; }
       };
-    },[JSON.stringify(series),unit]);
+    },[JSON.stringify(series), unit, selectedLift, selectedPoint&&selectedPoint.x]);
 
-    // Apply selection highlighting to the EXISTING chart instance without rebuilding
-    // it — this is what makes tapping a lift/point feel instant instead of triggering
-    // a full canvas recreation.
-    useEffect(function(){
-      var chart=chartRef.current;
-      if(!chart) return;
-      chart.data.datasets.forEach(function(ds){
-        var ser=series.find(function(s){return s.label===ds.label;});
-        if(!ser) return;
-        var isDimmed=selectedLift&&selectedLift!==ds.label;
-        var isSelected=selectedLift===ds.label;
-        ds.borderColor=isDimmed?ser.color+"30":ser.color;
-        ds.backgroundColor=ser.color+(isDimmed?"08":"33");
-        ds.borderWidth=isSelected?4:(isDimmed?1.5:2.5);
-        ds.order=isSelected?0:1;
-        ds.pointBackgroundColor=ds.data.map(function(v,i){
-          if(v===null) return ser.color;
-          var isSelPoint=selectedPoint&&selectedPoint.lift===ds.label&&selectedPoint.x===allX[i];
-          return isSelPoint?"#ffffff":(isDimmed?ser.color+"40":ser.color);
-        });
-        ds.pointBorderColor=ds.data.map(function(v,i){
-          var isSelPoint=selectedPoint&&selectedPoint.lift===ds.label&&selectedPoint.x===allX[i];
-          return isSelPoint?ser.color:"#0d0d0d";
-        });
-        ds.pointBorderWidth=ds.data.map(function(v,i){
-          var isSelPoint=selectedPoint&&selectedPoint.lift===ds.label&&selectedPoint.x===allX[i];
-          return isSelPoint?4:2;
-        });
-        ds.pointRadius=ds.data.map(function(v,i){
-          var isSelPoint=selectedPoint&&selectedPoint.lift===ds.label&&selectedPoint.x===allX[i];
-          return isSelPoint?9:(isDimmed?3:5);
-        });
-      });
-      chart.update("none"); // "none" = skip animation, instant highlight, no destroy
-    },[selectedLift,selectedPoint]);
-
-    function resetZoom(){ if(chartRef.current) chartRef.current.resetZoom(); }
-    function clearSelection(){ setSelectedLift(null); setSelectedPoint(null); }
-
-    var hasData=series.some(function(s){return s.data.length>0;});
-    if(!hasData) return h("div",{style:{height:200,display:"flex",alignItems:"center",justifyContent:"center",color:"var(--muted)",fontSize:13}},"Log AMRAP sets to populate this chart");
+    var hasData=series.some(function(s){return s.data&&s.data.length>0;});
+    if(!hasData){
+      return h("div",{style:{padding:24,textAlign:"center",color:"var(--muted)",fontSize:13}},
+        "No e1RM data yet. Log workouts with AMRAP reps to build the graph."
+      );
+    }
 
     return h("div",null,
-      h("div",{style:{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}},
-        h("button",{className:"btn btn-ghost btn-sm",onClick:resetZoom},"Reset Zoom"),
-        (selectedLift||selectedPoint)&&h("button",{className:"btn btn-ghost btn-sm",onClick:clearSelection},"Clear Selection"),
-        h("span",{style:{fontSize:11,color:"var(--muted)",marginLeft:"auto"}},"Pinch/scroll to zoom \u00b7 drag to pan \u00b7 tap a point to highlight")
+      // Lift selector — primary control
+      h("div",{style:{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}},
+        normSeries.filter(function(s){return s.data.length>0;}).map(function(s){
+          var on = selectedLift===s.label;
+          return h("button",{
+            key:s.label,
+            className:"sel-btn"+(on?" active":""),
+            style:{
+              flex:1, minWidth:70, minHeight:44, fontWeight:700,
+              borderColor:on?s.color:"var(--border)",
+              background:on?s.color:"transparent",
+              color:on?"#000":s.color
+            },
+            onClick:function(){ selectLift(s.label); }
+          }, s.label);
+        })
       ),
-      selectedPoint&&h("div",{style:{marginBottom:10,padding:"10px 14px",background:"var(--gold-dim)",border:"1px solid var(--gold)",borderRadius:10,fontSize:13}},
-        h("span",{style:{color:"var(--gold)",fontWeight:700}},selectedPoint.lift),
-        " on ",h("span",{style:{fontWeight:700}},formatAxisDate(selectedPoint.x)),": ",
-        h("span",{style:{color:"var(--gold)",fontWeight:800}},selectedPoint.y+unit+" e1RM")
+
+      // Detail card for selected point
+      selectedPoint
+        ? h("div",{style:{marginBottom:12,padding:"14px 16px",background:"var(--gold-dim)",border:"1.5px solid var(--gold)",borderRadius:12}},
+            h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",gap:8,flexWrap:"wrap"}},
+              h("div",null,
+                h("div",{style:{fontSize:11,color:"var(--muted)",textTransform:"uppercase",letterSpacing:1,marginBottom:4}},selectedPoint.lift),
+                h("div",{style:{fontSize:28,fontWeight:900,color:"var(--gold)",lineHeight:1}},selectedPoint.y+unit),
+                h("div",{style:{fontSize:13,color:"var(--text)",marginTop:6}},formatAxisDate(selectedPoint.x))
+              ),
+              h("div",{style:{display:"flex",gap:8,alignItems:"center"}},
+                h("button",{
+                  className:"btn btn-ghost btn-sm",
+                  style:{minWidth:44,minHeight:44,fontSize:18,fontWeight:900},
+                  disabled:pointIdx<=0,
+                  onClick:function(){ stepPoint(-1); }
+                },"‹"),
+                h("span",{style:{fontSize:12,color:"var(--muted)",minWidth:48,textAlign:"center"}},
+                  (pointIdx+1)+" / "+points.length
+                ),
+                h("button",{
+                  className:"btn btn-ghost btn-sm",
+                  style:{minWidth:44,minHeight:44,fontSize:18,fontWeight:900},
+                  disabled:pointIdx>=points.length-1,
+                  onClick:function(){ stepPoint(1); }
+                },"›")
+              )
+            )
+          )
+        : h("div",{style:{marginBottom:12,padding:"12px 14px",background:"var(--card)",border:"1px solid var(--border)",borderRadius:10,fontSize:13,color:"var(--muted)",textAlign:"center"}},
+            "Tap a lift above, then swipe the strip or use ‹ › to step through sessions."
+          ),
+
+      // Horizontal point strip — swipe to pick a dot
+      selectedLift&&points.length>0&&h("div",{
+        ref:stripRef,
+        style:{
+          display:"flex", gap:8, overflowX:"auto", WebkitOverflowScrolling:"touch",
+          padding:"4px 2px 14px", marginBottom:8, scrollSnapType:"x mandatory"
+        }
+      },
+        points.map(function(pt, i){
+          var on = i===pointIdx;
+          return h("button",{
+            key:pt.x+"-"+i,
+            "data-pt":String(i),
+            onClick:function(){ setPointIdx(i); },
+            style:{
+              flex:"0 0 auto", scrollSnapAlign:"center",
+              minWidth:88, padding:"10px 12px", borderRadius:10,
+              border:"1.5px solid "+(on?"var(--gold)":"var(--border)"),
+              background:on?"rgba(255,215,0,0.12)":"#0d0d0d",
+              color:on?"var(--gold)":"var(--text)",
+              textAlign:"center", cursor:"pointer"
+            }
+          },
+            h("div",{style:{fontSize:16,fontWeight:800}}, pt.y),
+            h("div",{style:{fontSize:10,color:"var(--muted)",marginTop:3}}, formatAxisDate(pt.x))
+          );
+        })
       ),
-      h("div",{style:{height:500,position:"relative"}},
+
+      h("div",{style:{height:280,position:"relative"}},
         h("canvas",{ref:canvasRef})
+      ),
+      h("div",{style:{fontSize:10,color:"var(--muted)",textAlign:"center",marginTop:6}},
+        "Pinch to zoom · drag to pan · or use the strip above"
       )
     );
   }
