@@ -1,5 +1,5 @@
 /* 531+ service worker — network-first HTML so updates always load; offline fallback */
-var CACHE = "531plus-v37";
+var CACHE = "531plus-v39";
 
 self.addEventListener("install", function (event) {
   event.waitUntil(self.skipWaiting());

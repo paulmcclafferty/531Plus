@@ -150,6 +150,22 @@ function dayCount(cfg){
 function dayLabel(cfg, dayIdx){
   return LIFT_LABELS[dayLift(cfg, dayIdx)]||("Day "+(dayIdx+1));
 }
+// Resolve which main lift a history entry is for.
+// Priority: explicit liftKey → lift label string → day as FIXED LIFTS index.
+// Never treat e.day as current dayOrder index (live logs store dayOrder index; CSV stores LIFTS index).
+function resolveLiftKeyFromHistory(e){
+  if(e && e.liftKey && LIFTS.indexOf(e.liftKey)>=0) return e.liftKey;
+  if(e && e.lift){
+    var low = String(e.lift).toLowerCase().trim();
+    if(low.indexOf("dead")>=0) return "deadlift";
+    if(low.indexOf("squat")>=0) return "squat";
+    if(low.indexOf("bench")>=0) return "bench";
+    if(low.indexOf("press")>=0||low.indexOf("ohp")>=0||low.indexOf("military")>=0||low.indexOf("shoulder")>=0) return "press";
+    if(LIFTS.indexOf(low)>=0) return low;
+  }
+  if(e && e.day!=null && e.day>=0 && e.day<LIFTS.length) return LIFTS[e.day];
+  return null;
+}
 var VARIANTS=[
   {id:"original",name:"5/3/1 Original",    desc:"Classic 3-week wave with AMRAP top set"},
   {id:"fsl",     name:"FSL",               desc:"First Set Last — 5x5 back-off at first set %"},
@@ -552,6 +568,7 @@ function parseSarasoftCSVText(text){
         cycle:cycle,
         week:week,
         day:Math.max(0,LIFTS.indexOf(lift)),
+        liftKey:lift,
         lift:LIFT_LABELS[lift]||lift,
         topSet:(amrapWt>0?String(amrapWt)+"kg":""),
         amrap:amrapReps>0?amrapReps:"—",
@@ -1197,7 +1214,7 @@ function Settings(p){
     });
 
     sortedHistory.forEach(function(entry){
-      var liftKey=LIFTS[entry.day];
+      var liftKey=resolveLiftKeyFromHistory(entry)||LIFTS[entry.day]||"squat";
       var liftName=liftNameMap[liftKey]||entry.lift;
       // Find matching PR record for this cycle/week/lift for set + e1RM detail
       var prMatch=(appState.prs[liftKey]||[]).find(function(p){return p.cycle===entry.cycle&&p.week===entry.week;});
@@ -1431,7 +1448,7 @@ function Settings(p){
         h("button",{className:"btn btn-gold",style:{width:"100%",marginTop:16,marginBottom:4},onClick:save},"Save Settings"),
 
         // Data & Backup
-        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.10 · Aug 2026"),
+        h("div",{style:{textAlign:"center",fontSize:10,color:"var(--muted)",margin:"8px 0 4px"}},"531+ v3.12 · Aug 2026"),
         h(SectionHeader,{name:"backup",title:"Data & Backup",subtitle:"Export, import, CSV"}),
         openSection==="backup"&&h("div",{style:{paddingBottom:6,paddingTop:4}},
           h("div",{className:"flex-row",style:{flexWrap:"wrap"}},
@@ -1470,6 +1487,15 @@ function App(){
     if(saved.cycle==null) saved.cycle=1;
     var maxD=dayCount(saved.cfg)-1;
     if(saved.day>maxD) saved.day=maxD;
+    // Heal / clamp the live "next workout" pointer
+    if(!saved.current||typeof saved.current!=="object"){
+      saved.current={cycle:saved.cycle,week:saved.week,day:saved.day};
+    } else {
+      if(saved.current.cycle==null) saved.current.cycle=saved.cycle;
+      if(saved.current.week==null) saved.current.week=saved.week;
+      if(saved.current.day==null||saved.current.day<0) saved.current.day=saved.day;
+      if(saved.current.day>maxD) saved.current.day=maxD;
+    }
   }catch(e){ saved=DEFAULT; }
   var stState=useState(saved); var st=stState[0],setSt=stState[1];
   var showSetState=useState(false); var showSettings=showSetState[0],setShowSettings=showSetState[1];
@@ -1482,7 +1508,14 @@ function App(){
   var swipeRef=useRef({x:0,y:0,active:false});
   function jumpToAnchor(){
     var a=st.current||{cycle:st.cycle,week:st.week,day:st.day};
-    setSt(function(p){return Object.assign({},p,{cycle:a.cycle,week:a.week,day:a.day});});
+    setSt(function(p){
+      var maxD=Math.max(0, dayCount(p.cfg)-1);
+      var d=a.day!=null?a.day:(p.day||0);
+      if(d<0) d=0;
+      if(d>maxD) d=maxD;
+      var cur={cycle:a.cycle!=null?a.cycle:p.cycle, week:a.week!=null?a.week:p.week, day:d};
+      return Object.assign({},p,{cycle:cur.cycle,week:cur.week,day:cur.day,current:cur});
+    });
     setTab("workout");
     setTimeout(function(){
       var el=document.getElementById("currentDay");
@@ -1544,8 +1577,17 @@ function App(){
     }
     setSt(function(p){
       var order=normalizeDayOrder(data.dayOrder||p.cfg.dayOrder);
-      var nd=Math.min(p.day, order.length-1);
-      return Object.assign({},p,{cfg:Object.assign({},p.cfg,{variant:data.variant,accStyle:data.accStyle,unit:data.unit,deloadEvery7:data.deloadEvery7,warmup:data.warmup!==false,joker:data.joker||false,restSecs:data.restSecs||0,timerOnWarmup:!!data.timerOnWarmup,jokerAfterAmrap:!!data.jokerAfterAmrap,incLower:data.incLower!=null?data.incLower:5,incUpper:data.incUpper!=null?data.incUpper:2.5,dayOrder:order,autoBackup:data.autoBackup!==false}),tms:data.tms,customAcc:data.customAcc||p.customAcc,day:nd});
+      var maxD=Math.max(0, order.length-1);
+      var nd=Math.min(p.day!=null?p.day:0, maxD);
+      var cur=p.current||{cycle:p.cycle,week:p.week,day:p.day};
+      var curDay=Math.min(cur.day!=null?cur.day:0, maxD);
+      return Object.assign({},p,{
+        cfg:Object.assign({},p.cfg,{variant:data.variant,accStyle:data.accStyle,unit:data.unit,deloadEvery7:data.deloadEvery7,warmup:data.warmup!==false,joker:data.joker||false,restSecs:data.restSecs||0,timerOnWarmup:!!data.timerOnWarmup,jokerAfterAmrap:!!data.jokerAfterAmrap,incLower:data.incLower!=null?data.incLower:5,incUpper:data.incUpper!=null?data.incUpper:2.5,dayOrder:order,autoBackup:data.autoBackup!==false}),
+        tms:data.tms,
+        customAcc:data.customAcc||p.customAcc,
+        day:nd,
+        current:{cycle:cur.cycle!=null?cur.cycle:p.cycle, week:cur.week!=null?cur.week:p.week, day:curDay}
+      });
     });
   }
 
@@ -1709,23 +1751,16 @@ function App(){
     });
   }
 
-    function openHistoryWorkout(e){
-    var liftKey = null;
-    if(e.day!=null && e.day>=0 && e.day<LIFTS.length) liftKey = LIFTS[e.day];
-    if(!liftKey && e.lift){
-      var low = String(e.lift).toLowerCase();
-      if(low.indexOf("dead")>=0) liftKey="deadlift";
-      else if(low.indexOf("squat")>=0) liftKey="squat";
-      else if(low.indexOf("bench")>=0) liftKey="bench";
-      else if(low.indexOf("press")>=0||low.indexOf("ohp")>=0||low.indexOf("military")>=0) liftKey="press";
-    }
-    var dayIdx = 0;
+  function openHistoryWorkout(e){
+    var liftKey = resolveLiftKeyFromHistory(e);
     var order = normalizeDayOrder(st.cfg.dayOrder);
+    var dayIdx = 0;
     if(liftKey){
       var found = order.indexOf(liftKey);
-      if(found>=0) dayIdx = found;
-      else if(e.day!=null) dayIdx = Math.min(e.day, order.length-1);
-    } else if(e.day!=null) dayIdx = Math.min(e.day, order.length-1);
+      dayIdx = found>=0 ? found : 0;
+    } else if(e.day!=null){
+      dayIdx = Math.min(Math.max(0, e.day), Math.max(0, order.length-1));
+    }
 
     var week = e.week!=null ? e.week : st.week;
     var cycle = e.cycle!=null ? e.cycle : st.cycle;
@@ -1738,8 +1773,9 @@ function App(){
       var m = String(e.topSet).match(/([0-9]+(?:\.[0-9]+)?)/);
       if(m){
         var val = parseFloat(m[1]);
-        if(!isNaN(val)){
+        if(!isNaN(val) && val>0){
           if(/lb/i.test(String(e.topSet))) topWtKg = fromDisp(val, "lbs");
+          else if(/kg/i.test(String(e.topSet))) topWtKg = fromDisp(val, "kg");
           else topWtKg = fromDisp(val, st.cfg.unit||"kg");
         }
       }
@@ -1751,20 +1787,24 @@ function App(){
       returnCycle: st.cycle,
       returnWeek: st.week,
       returnDay: st.day,
-      date: e.date||""
+      date: e.date||"",
+      liftKey: liftKey
     });
     setSt(function(p){
       var amraps = Object.assign({}, p.amraps);
       var notes = Object.assign({}, p.notes);
       var weightOverrides = Object.assign({}, p.weightOverrides||{});
       var checks = Object.assign({}, p.checks);
+      var ms = getMainSets(p.cfg.variant, week);
+      for(var si=0; si<ms.length; si++){
+        var sk = "w"+week+"d"+dayIdx+"s"+si;
+        delete weightOverrides[sk];
+        delete amraps[sk];
+        checks[sk+"_done"] = true;
+      }
       if(ar) amraps[ak] = ar;
       if(e.notes) notes[noteKey] = e.notes;
       if(topWtKg!=null && topWtKg>0) weightOverrides[ak] = rndW(topWtKg, "kg");
-      var ms = getMainSets(p.cfg.variant, week);
-      for(var si=0; si<ms.length; si++){
-        checks["w"+week+"d"+dayIdx+"s"+si+"_done"] = true;
-      }
       return Object.assign({}, p, {
         cycle: cycle,
         week: week,
@@ -1801,7 +1841,7 @@ function App(){
     var isEdit = !!(editingHist&&editingHist.id);
     var entryDate = isEdit&&editingHist.date ? editingHist.date : new Date().toLocaleDateString();
     var entryId = isEdit ? editingHist.id : Date.now();
-    var entry={id:entryId,date:entryDate,cycle:st.cycle,week:st.week,day:st.day,lift:LIFT_LABELS[lift],topSet:toDisp(topWt,st.cfg.unit)+toLbl(st.cfg.unit),amrap:ar||"—",notes:noteVal};
+    var entry={id:entryId,date:entryDate,cycle:st.cycle,week:st.week,day:st.day,liftKey:lift,lift:LIFT_LABELS[lift],topSet:toDisp(topWt,st.cfg.unit)+toLbl(st.cfg.unit),amrap:ar||"—",notes:noteVal};
 
     setSt(function(p){
       var prs=Object.assign({},p.prs);
@@ -1823,12 +1863,28 @@ function App(){
       } else {
         history=[entry].concat(p.history);
       }
-      var patch={history:history, prs:prs, current:{cycle:p.cycle,week:p.week,day:p.day}};
-      // Restore live program position after editing a past session
+      var patch={history:history, prs:prs};
+      // Editing a past session must NOT hijack the live "next workout" pointer.
+      // Restore the position you came from and keep current pointed at the real program position.
       if(isEdit && editingHist){
-        patch.cycle = editingHist.returnCycle;
-        patch.week = editingHist.returnWeek;
-        patch.day = editingHist.returnDay;
+        var rc=editingHist.returnCycle, rw=editingHist.returnWeek, rd=editingHist.returnDay;
+        patch.cycle = rc;
+        patch.week = rw;
+        patch.day = rd;
+        // Prefer the pre-edit current if it existed; otherwise the return position
+        var prevCur = p.current;
+        if(prevCur && prevCur.cycle!=null && prevCur.week!=null && prevCur.day!=null){
+          patch.current = {cycle:prevCur.cycle, week:prevCur.week, day:prevCur.day};
+        } else {
+          patch.current = {cycle:rc, week:rw, day:rd};
+        }
+      } else {
+        // Normal log: advance to the next day in this week so Home/Next shows what's actually next.
+        // On the last day of the week, stay put — user hits Advance for the next week.
+        var maxD = dayCount(p.cfg) - 1;
+        var nextDay = p.day < maxD ? p.day + 1 : p.day;
+        patch.day = nextDay;
+        patch.current = {cycle:p.cycle, week:p.week, day:nextDay};
       }
       return Object.assign({},p,patch);
     });
@@ -1990,9 +2046,15 @@ function App(){
   );
 
   // ── HOME TAB ─────────────────────────────────────────────────────────────
-  var nextLift=LIFT_LABELS[dayLift(st.cfg,st.day)];
-  var nextTM=st.tms[dayLift(st.cfg,st.day)]||0;
-  var nextWave=getMainSets(st.cfg.variant,st.week);
+  // Always show the live program pointer (current), not whatever day you last browsed.
+  var anchor=st.current||{cycle:st.cycle,week:st.week,day:st.day};
+  var anchorDay=anchor.day!=null?anchor.day:st.day;
+  var anchorWeek=anchor.week!=null?anchor.week:st.week;
+  var anchorCycle=anchor.cycle!=null?anchor.cycle:st.cycle;
+  var nextLiftKey=dayLift(st.cfg,anchorDay);
+  var nextLift=LIFT_LABELS[nextLiftKey];
+  var nextTM=st.tms[nextLiftKey]||0;
+  var nextWave=getMainSets(st.cfg.variant,anchorWeek);
   var lastEntry=st.history[0]||null;
 
   var homeContent=h("div",null,
@@ -2000,7 +2062,7 @@ function App(){
     h("div",{className:"hero"},
       h("div",{style:{fontSize:10,fontWeight:700,letterSpacing:2,textTransform:"uppercase",color:"var(--gold)",marginBottom:6}},"Next Workout"),
       h("div",{style:{fontWeight:900,fontSize:28,color:"#fff",marginBottom:2}},nextLift),
-      h("div",{style:{fontSize:12,color:"var(--muted)",marginBottom:16}},"Cycle "+st.cycle+" / Week "+st.week+(st.week===4?" (Deload)":"")),
+      h("div",{style:{fontSize:12,color:"var(--muted)",marginBottom:16}},"Cycle "+anchorCycle+" / Week "+anchorWeek+(anchorWeek===4?" (Deload)":"")),
       nextTM>0&&h("div",{style:{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}},
         nextWave.map(function(set,i){
           var wt=toDisp(r5(nextTM*set.pct),st.cfg.unit);
@@ -2013,7 +2075,7 @@ function App(){
         })
       ),
       h("button",{className:"btn btn-gold",style:{width:"100%",fontSize:14,padding:14,letterSpacing:2},
-        onClick:function(){setTab("workout");}
+        onClick:function(){jumpToAnchor();}
       },"START WORKOUT")
     ),
     // Stats
@@ -2032,9 +2094,9 @@ function App(){
         LIFTS.map(function(l){
           var tmv=st.tms[l];
           var latestPR=(st.prs[l]||[]).slice(-1)[0];
-          var isToday=l===dayLift(st.cfg,st.day);
+          var isToday=l===nextLiftKey;
           return h("div",{key:l,style:{background:"#0d0d0d",border:"1px solid "+(isToday?"var(--gold)":"var(--border)"),borderRadius:4,padding:"10px 12px"}},
-            h("div",{style:{fontSize:10,color:isToday?"var(--gold)":"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:4}},LIFT_LABELS[l]+(isToday?" TODAY":"")),
+            h("div",{style:{fontSize:10,color:isToday?"var(--gold)":"var(--muted)",fontWeight:700,textTransform:"uppercase",marginBottom:4}},LIFT_LABELS[l]+(isToday?" NEXT":"")),
             h("div",{style:{fontWeight:900,fontSize:20}},tmv?toDisp(tmv,st.cfg.unit):"—",h("span",{style:{fontSize:11,color:"var(--muted)",marginLeft:3}},toLbl(st.cfg.unit)+" TM")),
             latestPR&&h("div",{style:{fontSize:10,color:"var(--green)",marginTop:3}},"Est 1RM: ~"+toDisp(latestPR.est,st.cfg.unit)+toLbl(st.cfg.unit))
           );
@@ -2944,7 +3006,7 @@ function App(){
       var edited = hist.find(function(e){return e.id===histEdit.id;});
       var prs = Object.assign({},p.prs);
       if(edited){
-        var liftKey = LIFTS[edited.day];
+        var liftKey = resolveLiftKeyFromHistory(edited);
         var wt = parseFloat(edited.topSet);
         var ar = parseInt(edited.amrap);
         if(liftKey && !isNaN(wt) && ar>0){
