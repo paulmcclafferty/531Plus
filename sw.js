@@ -1,5 +1,5 @@
 /* 531+ service worker — network-first HTML so updates always load; offline fallback */
-var CACHE = "531plus-v43";
+var CACHE = "531plus-v44";
 
 self.addEventListener("install", function (event) {
   event.waitUntil(self.skipWaiting());
@@ -30,7 +30,6 @@ self.addEventListener("fetch", function (event) {
     /index\.html(\?|$)/.test(url) ||
     /\/$/.test(url.split("?")[0]);
 
-  // Network-first for app shell so a bad/old cache can never stick forever
   if (isHTML) {
     event.respondWith(
       fetch(req)
@@ -54,7 +53,6 @@ self.addEventListener("fetch", function (event) {
     return;
   }
 
-  // Cache-first for other same-origin assets; network fallback
   event.respondWith(
     caches.match(req).then(function (cached) {
       if (cached) return cached;
