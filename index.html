@@ -126,7 +126,7 @@ var h=React.createElement, useState=React.useState, useEffect=React.useEffect, u
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
 // Bump on every release — header compares this to the live deploy
-var APP_VERSION="3.20";
+var APP_VERSION="3.21";
 var LIFTS=["squat","bench","deadlift","press"];
 var LIFT_LABELS={squat:"Squat",bench:"Bench",deadlift:"Deadlift",press:"OHP"};
 var DAY_LABELS=["Squat","Bench","Deadlift","OHP"];
@@ -641,16 +641,28 @@ function downloadBackupFile(state, quiet){
   try{
     if(!state) return;
     var payload=Object.assign({},state,{_exportedAt:new Date().toISOString(),_app:"531plus"});
-    var blob=new Blob([JSON.stringify(payload,null,2)],{type:"application/json"});
-    var a=document.createElement("a");
+    var json=JSON.stringify(payload,null,2);
+    // application/octet-stream forces a file save on iOS Safari more reliably than application/json
+    // (json often opens a preview / "what do you want to do" sheet instead of downloading).
+    var blob=new Blob([json],{type:"application/octet-stream"});
     var d=new Date();
-    var mm=d.getMonth()+1,dd=d.getDate(); var stamp=d.getFullYear()+"-"+(mm<10?"0":"")+mm+"-"+(dd<10?"0":"")+dd;
+    var mm=d.getMonth()+1,dd=d.getDate();
+    var stamp=d.getFullYear()+"-"+(mm<10?"0":"")+mm+"-"+(dd<10?"0":"")+dd;
+    var fname="531plus-backup-"+stamp+".json";
+    var a=document.createElement("a");
     a.href=URL.createObjectURL(blob);
-    a.download="531plus-backup-"+stamp+".json";
+    a.download=fname;
+    a.style.display="none";
     a.rel="noopener";
     document.body.appendChild(a);
-    a.click();
-    setTimeout(function(){ try{ URL.revokeObjectURL(a.href); a.remove(); }catch(e){} }, 1500);
+    // Must run in the same turn as a user tap — delayed calls open a preview on iOS
+    if(typeof a.click==="function") a.click();
+    else{
+      var evt=document.createEvent("MouseEvents");
+      evt.initEvent("click",true,true);
+      a.dispatchEvent(evt);
+    }
+    setTimeout(function(){ try{ URL.revokeObjectURL(a.href); a.remove(); }catch(e){} }, 2000);
     try{ localStorage.setItem("531plus_last_backup", String(Date.now())); }catch(e){}
   }catch(e){
     if(!quiet) try{ alert("Backup download failed. Use Settings → Export JSON."); }catch(e2){}
@@ -1681,17 +1693,21 @@ function App(){
     });
   }
 
-  // Week-3 top-set e1RM for a lift in a given cycle (the 1+ money week)
-  function week3E1RM(state, lift, cycleNum){
-    var best=0;
+  // Best top-set AMRAP this cycle: prefer week 3 (1+), else week 2, else week 1.
+  // Only real weight × reps — never a stored est (that inflated e.g. 100×1 → "123").
+  function cycleTopSetAmrap(state, lift, cycleNum){
+    var best=null; // {top,reps,week,est}
     function take(top,reps,week){
       week=Number(week)||0;
-      if(week!==3) return;
       top=Number(top)||0;
       reps=parseInt(reps,10)||0;
+      if(week<1||week>3) return;
       if(top<=0||reps<=0) return;
-      var v=epley(top,reps);
-      if(v>best) best=v;
+      var est=epley(top,reps); // 1 rep → exact weight
+      if(!best){ best={top:top,reps:reps,week:week,est:est}; return; }
+      if(week>best.week || (week===best.week && est>best.est)){
+        best={top:top,reps:reps,week:week,est:est};
+      }
     }
     ((state.prs&&state.prs[lift])||[]).forEach(function(pr){
       if(!pr||Number(pr.cycle)!==Number(cycleNum)) return;
@@ -1718,29 +1734,45 @@ function App(){
     });
     return best;
   }
-  // -5% / stay / +5% from week-3 e1RM vs current TM
-  function recommendTM(tm, week3Est){
+  // Wendler-style: use AMRAP *reps* on the top set, not a fuzzy e1RM/TM ratio.
+  // 100×1 → e1RM 100 (not 123). Week 3: 5+ = +5%, 3–4 = +5%, 1–2 = stay (unless very weak).
+  function recommendTM(tm, setInfo){
     tm=Number(tm)||0;
-    week3Est=Number(week3Est)||0;
     if(tm<=0) return null;
-    if(week3Est<=0){
-      return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:0,reason:"No week 3 AMRAP — keep TM"};
+    if(!setInfo||!setInfo.top||!setInfo.reps){
+      return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:0,top:0,reps:0,week:0,reason:"No top-set AMRAP this cycle — keep TM"};
     }
-    var ratio=week3Est/tm;
-    if(ratio>=1.05){
-      return {action:"up",pct:5,newTM:r5(tm*1.05),week3Est:week3Est,reason:"Week 3 e1RM "+week3Est+" ≥ 105% of TM — increase"};
+    var top=setInfo.top, reps=setInfo.reps, week=setInfo.week, est=setInfo.est;
+    var setLabel="W"+week+" "+top+"×"+reps+" → e1RM "+est;
+    if(week===3){
+      if(reps>=3){
+        return {action:"up",pct:5,newTM:r5(tm*1.05),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — solid 1+ week, +5%"};
+      }
+      if(reps>=1){
+        if(est<tm*0.9){
+          return {action:"down",pct:-5,newTM:r5(tm*0.95),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — under 90% TM, −5%"};
+        }
+        return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — hit the single, hold TM"};
+      }
     }
-    if(ratio>=0.95){
-      return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:week3Est,reason:"Week 3 e1RM "+week3Est+" near TM — hold"};
+    if(week===1){
+      if(reps>=10) return {action:"up",pct:5,newTM:r5(tm*1.05),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — big week 1 AMRAP, +5%"};
+      if(reps>=5) return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — week 1 ok, hold (week 3 decides)"};
+      return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — light week 1, hold"};
     }
-    return {action:"down",pct:-5,newTM:r5(tm*0.95),week3Est:week3Est,reason:"Week 3 e1RM "+week3Est+" < 95% of TM — decrease"};
+    if(week===2){
+      if(reps>=8) return {action:"up",pct:5,newTM:r5(tm*1.05),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — big week 2 AMRAP, +5%"};
+      if(reps>=3) return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — week 2 ok, hold (week 3 decides)"};
+      return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — light week 2, hold"};
+    }
+    return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel};
   }
   function buildTMRecommendations(state, cycleNum){
     var out={};
     LIFTS.forEach(function(l){
       var tm=Number(state.tms&&state.tms[l])||0;
-      var w3=week3E1RM(state,l,cycleNum);
-      var rec=recommendTM(tm,w3);
+      var setInfo=cycleTopSetAmrap(state,l,cycleNum);
+      var rec=recommendTM(tm,setInfo);
       if(rec) out[l]=rec;
     });
     return out;
@@ -2032,6 +2064,15 @@ function App(){
     var entryId = isEdit ? editingHist.id : Date.now();
     var entry={id:entryId,date:entryDate,cycle:st.cycle,week:st.week,day:st.day,liftKey:lift,lift:LIFT_LABELS[lift],topSet:toDisp(topWt,st.cfg.unit)+toLbl(st.cfg.unit),amrap:ar||"—",notes:noteVal};
 
+    // Must run in the same user-tap turn as Log & Exit — delayed downloads open a
+    // preview/"Open with" sheet on iOS instead of saving to Files automatically.
+    if(!isEdit && st.cfg.autoBackup!==false){
+      try{
+        var histSnap=isEdit?st.history:[entry].concat(st.history||[]);
+        downloadBackupFile(Object.assign({},st,{history:histSnap}), true);
+      }catch(e){}
+    }
+
     setSt(function(p){
       var prs=Object.assign({},p.prs);
       if(est){
@@ -2115,18 +2156,8 @@ function App(){
     if(!endingCycle && st.week === 3 && st.day >= maxDLog){
       endingCycle = st.cycle;
     }
-    // Auto-backup to device Downloads so history survives clearing site data
-    try{
-      if(st.cfg.autoBackup!==false){
-        setTimeout(function(){
-          try{
-            var latest=null;
-            try{ latest=JSON.parse(localStorage.getItem(STORAGE_KEY)); }catch(e){}
-            downloadBackupFile(latest||Object.assign({},st,{history:[entry].concat(st.history||[])}), true);
-          }catch(e){}
-        }, 400);
-      }
-    }catch(e){}
+    // Auto-backup is triggered from the Log button click (same user gesture) so iOS
+    // actually downloads instead of opening a preview sheet. See logAndExit().
     setTab("home");
     if(endingCycle!=null){
       // Use state after this log: week 3 data for endingCycle is complete for this lift
@@ -2949,7 +2980,12 @@ function App(){
         )
       ),
       h("div",{style:{display:"flex",justifyContent:"flex-end",marginTop:4}},
-        h("button",{className:"btn btn-green",disabled:logBusy,onClick:function(){if(logBusy)return;setLogBusy(true);logWorkout();setTimeout(function(){setLogBusy(false);},800);}},logBusy?"Saving…":(editingHist?"Save changes":"Log & Exit"))
+        h("button",{className:"btn btn-green",disabled:logBusy,onClick:function(){
+          if(logBusy) return;
+          setLogBusy(true);
+          logWorkout();
+          setTimeout(function(){setLogBusy(false);},800);
+        }},logBusy?"Saving…":(editingHist?"Save changes":"Log & Exit"))
       )
     )
     )
@@ -3592,7 +3628,9 @@ function App(){
               h("span",{style:{fontWeight:800}},LIFT_LABELS[l]),
               h("span",{style:{fontSize:12,color:"var(--muted)"}},
                 "TM "+toDisp(tmNow,st.cfg.unit)+toLbl(st.cfg.unit),
-                rec.week3Est?(" · W3 e1RM ~"+toDisp(rec.week3Est,st.cfg.unit)):(" · no W3 AMRAP")
+                (rec.top&&rec.reps)
+                  ?(" · W"+rec.week+" "+toDisp(rec.top,st.cfg.unit)+"×"+rec.reps+" = "+toDisp(rec.week3Est,st.cfg.unit)+" e1RM")
+                  :(" · no AMRAP")
               )
             ),
             h("div",{style:{fontSize:11,color:"var(--muted)",marginBottom:8}},rec.reason),
