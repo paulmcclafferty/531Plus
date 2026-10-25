@@ -126,7 +126,7 @@ var h=React.createElement, useState=React.useState, useEffect=React.useEffect, u
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
 // Bump on every release — header compares this to the live deploy
-var APP_VERSION="3.23";
+var APP_VERSION="3.26";
 var LIFTS=["squat","bench","deadlift","press"];
 var LIFT_LABELS={squat:"Squat",bench:"Bench",deadlift:"Deadlift",press:"OHP"};
 var DAY_LABELS=["Squat","Bench","Deadlift","OHP"];
@@ -1734,38 +1734,43 @@ function App(){
     });
     return best;
   }
-  // Wendler-style: use AMRAP *reps* on the top set, not a fuzzy e1RM/TM ratio.
-  // 100×1 → e1RM 100 (not 123). Week 3: 5+ = +5%, 3–4 = +5%, 1–2 = stay (unless very weak).
-  function recommendTM(tm, setInfo){
+  // Classic Wendler progression (kg): upper +2.5, lower +5 after a successful cycle.
+  // Stall if missed prescribed reps OR e1RM < 95% of target (TM÷0.9).
+  // Stall options: Stay / −5% / Reset TM to 90% of e1RM.
+  function wendlerBumpKg(lift){
+    return (lift==="squat"||lift==="deadlift")?5:2.5;
+  }
+  function prescribedMinReps(week){
+    week=Number(week)||0;
+    if(week===1) return 5;
+    if(week===2) return 3;
+    if(week===3) return 1;
+    return 0;
+  }
+  function recommendTM(tm, setInfo, lift){
     tm=Number(tm)||0;
     if(tm<=0) return null;
+    var target=Math.round(tm/0.9);
+    var bump=wendlerBumpKg(lift);
+    var upTM=r5(tm+bump);
     if(!setInfo||!setInfo.top||!setInfo.reps){
-      return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:0,top:0,reps:0,week:0,reason:"No top-set AMRAP this cycle — keep TM"};
+      return {action:"stay",stall:false,bump:bump,newTM:Math.round(tm),week3Est:0,top:0,reps:0,week:0,target:target,resetTM:0,
+        reason:"No AMRAP logged — keep TM (target "+target+")"};
     }
     var top=setInfo.top, reps=setInfo.reps, week=setInfo.week, est=setInfo.est;
-    var setLabel="W"+week+" "+top+"×"+reps+" → e1RM "+est;
-    if(week===3){
-      if(reps>=3){
-        return {action:"up",pct:5,newTM:r5(tm*1.05),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — solid 1+ week, +5%"};
-      }
-      if(reps>=1){
-        if(est<tm*0.9){
-          return {action:"down",pct:-5,newTM:r5(tm*0.95),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — under 90% TM, −5%"};
-        }
-        return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — hit the single, hold TM"};
-      }
+    var minR=prescribedMinReps(week);
+    var missed=minR>0&&reps<minR;
+    var weak=est>0&&est<target*0.95;
+    var stalled=missed||weak;
+    var setLabel="W"+week+" "+top+"×"+reps+" → e1RM "+est+" (target "+target+")";
+    var resetTM=est>0?r5(est*0.9):Math.round(tm);
+    if(stalled){
+      var why=missed&&weak?"missed prescribed + e1RM <95% target":missed?"missed prescribed reps":"e1RM <95% of target";
+      return {action:"reset",stall:true,bump:bump,newTM:resetTM,week3Est:est,top:top,reps:reps,week:week,target:target,resetTM:resetTM,
+        reason:setLabel+" — STALL ("+why+"). Offer stay / −5% / reset to 90% e1RM"};
     }
-    if(week===1){
-      if(reps>=10) return {action:"up",pct:5,newTM:r5(tm*1.05),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — big week 1 AMRAP, +5%"};
-      if(reps>=5) return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — week 1 ok, hold (week 3 decides)"};
-      return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — light week 1, hold"};
-    }
-    if(week===2){
-      if(reps>=8) return {action:"up",pct:5,newTM:r5(tm*1.05),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — big week 2 AMRAP, +5%"};
-      if(reps>=3) return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — week 2 ok, hold (week 3 decides)"};
-      return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel+" — light week 2, hold"};
-    }
-    return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel};
+    return {action:"up",stall:false,bump:bump,newTM:upTM,week3Est:est,top:top,reps:reps,week:week,target:target,resetTM:resetTM,
+      reason:setLabel+" — progress: +"+bump+"kg (Wendler)"};
   }
   function buildTMRecommendations(state, cycleNum, onlyLifts){
     var out={};
@@ -1773,34 +1778,40 @@ function App(){
     list.forEach(function(l){
       var tm=Number(state.tms&&state.tms[l])||0;
       var setInfo=cycleTopSetAmrap(state,l,cycleNum);
-      var rec=recommendTM(tm,setInfo);
+      var rec=recommendTM(tm,setInfo,l);
       if(rec) out[l]=rec;
     });
     return out;
   }
-  // onlyLifts: optional array — week 3 Log & Exit asks per lift, once per cycle
-  function openTMRecModal(cycleNum, afterApply, onlyLifts, stateSnap){
+  function openTMRecModal(cycleNum, afterApply, onlyLifts, stateSnap, summary){
     var base=stateSnap||st;
     var recs=buildTMRecommendations(base, cycleNum, onlyLifts);
     var picks={};
     Object.keys(recs).forEach(function(l){ picks[l]=recs[l].action; });
-    setTmRec({cycle:cycleNum,recs:recs,picks:picks,afterApply:afterApply||null,onlyLifts:onlyLifts||null});
+    setTmRec({cycle:cycleNum,recs:recs,picks:picks,afterApply:afterApply||null,onlyLifts:onlyLifts||null,summary:!!summary});
   }
   function applyTMRecommendations(){
     if(!tmRec) return;
     var after=tmRec.afterApply;
-    var liftsToApply=tmRec.onlyLifts&&tmRec.onlyLifts.length?tmRec.onlyLifts:LIFTS;
+    var liftsToApply=tmRec.onlyLifts&&tmRec.onlyLifts.length?tmRec.onlyLifts:Object.keys(tmRec.recs||{});
+    if(!liftsToApply.length) liftsToApply=LIFTS;
     var cyc=tmRec.cycle;
     setSt(function(p){
       var nt=Object.assign({},p.tms);
       var adj=Object.assign({},p.tmAdj||{});
       liftsToApply.forEach(function(l){
         var pick=(tmRec.picks&&tmRec.picks[l])||"stay";
+        var rec=tmRec.recs&&tmRec.recs[l];
         var tm=Number(nt[l])||0;
         if(!tm) return;
-        if(pick==="up") nt[l]=r5(tm*1.05);
+        if(pick==="up") nt[l]=r5(tm+wendlerBumpKg(l));
         else if(pick==="down") nt[l]=r5(tm*0.95);
-        adj[l]=cyc; // mark TM decided for this lift this cycle
+        else if(pick==="reset"){
+          var est=rec&&rec.week3Est?rec.week3Est:0;
+          nt[l]=est>0?r5(est*0.9):tm;
+        }
+        // stay: unchanged
+        adj[l]=cyc;
       });
       var patch={tms:nt,tmAdj:adj};
       if(after) Object.assign(patch, after);
@@ -1810,6 +1821,8 @@ function App(){
   }
 
   function advanceWeek(){
+    var endingDeload=st.week>=4;
+    var cyc=st.cycle;
     setSt(function(p){
       var week=p.week,cycle=p.cycle,totalWeeks=p.totalWeeks,cfg=p.cfg;
       var newTotal=(totalWeeks||0)+1;
@@ -1821,22 +1834,24 @@ function App(){
         var nc2={cycle:cycle,week:week+1,day:0};
         return Object.assign({},p,{week:week+1,day:0,totalWeeks:newTotal,current:nc2});
       }
-      // End of deload → next cycle. TMs already set after each week-3 log.
-      var nc3={cycle:cycle+1,week:1,day:0};
-      return Object.assign({},p,{week:1,day:0,cycle:cycle+1,totalWeeks:newTotal,current:nc3});
+      // Stay on week 4 until TM summary applied (afterApply advances cycle)
+      return p;
     });
+    if(endingDeload){
+      openTMRecModal(cyc, {
+        week:1, day:0, cycle:cyc+1,
+        totalWeeks:(st.totalWeeks||0)+1,
+        current:{cycle:cyc+1, week:1, day:0}
+      }, null, null, true);
+    }
   }
   function skipDeload(){
-    // Skip deload → next cycle. TMs already handled on week 3 — no second TM prompt.
     var cyc=st.cycle;
-    setSt(function(p){
-      return Object.assign({},p,{
-        week:1, day:0, cycle:cyc+1,
-        totalWeeks:(p.totalWeeks||0)+1,
-        current:{cycle:cyc+1, week:1, day:0}
-      });
-    });
-    setTab("home");
+    openTMRecModal(cyc, {
+      week:1, day:0, cycle:cyc+1,
+      totalWeeks:(st.totalWeeks||0)+1,
+      current:{cycle:cyc+1, week:1, day:0}
+    }, null, null, true);
   }
 
   function goBack(){
@@ -2157,31 +2172,43 @@ function App(){
       setTab("history");
       return;
     }
-    // TM change once per cycle per lift — only after that lift's week 3 (1+) Log & Exit
-    var justLoggedLift=lift;
-    var justLoggedCycle=st.cycle;
-    var isWeek3=st.week===3;
-    var alreadyAdj=st.tmAdj&&st.tmAdj[justLoggedLift]===justLoggedCycle;
-    setTab("home");
-    if(isWeek3&&!alreadyAdj){
-      // Snapshot includes this log so e1RM uses the set just saved
+    // Snapshot for TM prompts (includes this log)
+    function buildLogSnap(){
       var histSnap=[entry].concat(st.history||[]);
       var prsSnap=Object.assign({},st.prs);
       if(est){
         var pl=(prsSnap[lift]||[]).slice();
         var found=false;
         for(var pi=0;pi<pl.length;pi++){
-          if(pl[pi].cycle===st.cycle&&pl[pi].week===3){
+          if(Number(pl[pi].cycle)===st.cycle&&Number(pl[pi].week)===st.week){
             pl[pi]=Object.assign({},pl[pi],{est:est,tm:tm,topWt:topWt,amrap:ar,date:entryDate});
             found=true; break;
           }
         }
-        if(!found) pl=pl.concat([{cycle:st.cycle,week:3,est:est,tm:tm,topWt:topWt,amrap:ar,date:entryDate}]);
+        if(!found) pl=pl.concat([{cycle:st.cycle,week:st.week,est:est,tm:tm,topWt:topWt,amrap:ar,date:entryDate}]);
         prsSnap[lift]=pl;
       }
-      var snap=Object.assign({},st,{history:histSnap,prs:prsSnap});
+      return Object.assign({},st,{history:histSnap,prs:prsSnap});
+    }
+    var justLoggedLift=lift;
+    var justLoggedCycle=st.cycle;
+    var isWeek3=st.week===3;
+    var alreadyAdj=st.tmAdj&&st.tmAdj[justLoggedLift]===justLoggedCycle;
+    var maxDLog=dayCount(st.cfg)-1;
+    var endOfCycle=st.week>=4&&st.day>=maxDLog;
+    setTab("home");
+    if(isWeek3&&!alreadyAdj){
+      var snap=buildLogSnap();
+      setTimeout(function(){ openTMRecModal(justLoggedCycle, null, [justLoggedLift], snap, false); }, 200);
+    }else if(endOfCycle){
+      // End-of-cycle summary for all lifts (Wendler review before next cycle)
+      var snapEnd=buildLogSnap();
       setTimeout(function(){
-        openTMRecModal(justLoggedCycle, null, [justLoggedLift], snap);
+        openTMRecModal(justLoggedCycle, {
+          week:1, day:0, cycle:justLoggedCycle+1,
+          totalWeeks:(st.totalWeeks||0)+1,
+          current:{cycle:justLoggedCycle+1, week:1, day:0}
+        }, null, snapEnd, true);
       }, 200);
     }
   }
@@ -2340,55 +2367,11 @@ function App(){
     if(topKg<=0||reps<=0) return 0;
     return epley(topKg,reps);
   }
-  // Cycle e1RM is TM-based for this cycle (all lifts):
-  //   baseline = current TM
-  //   can only rise from THIS cycle's AMRAP sets that look like programmed top sets
-  //   (weight within ~TM working range). Rejects e1RM-as-weight import junk (e.g. 82 when TM is 60).
-  var curCycleNum=Number(st.cycle);
+  // Cycle e1RM (header) = estimated true 1RM from this cycle's TM only (TM ÷ 0.9).
+  // Never from old PRs or AMRAP history — those feed week-3 TM recs separately.
   var curTM=Number(tm)||0;
-  var amrapBestThisCycle=0;
-  var amrapBestSrc="";
-  function considerCycleAmrap(topKg,reps,week){
-    week=Number(week)||0;
-    topKg=Number(topKg)||0;
-    reps=parseInt(reps,10)||0;
-    if(week===4) return;
-    if(topKg<=0||reps<=0) return;
-    if(curTM>0){
-      // Must be a working set vs CURRENT training max — not an old true-1RM stored as weight
-      if(topKg>curTM*1.08) return;
-      if(topKg<curTM*0.55) return;
-      // Single at/above ~TM is a max attempt / bad import, not cycle AMRAP progress
-      if(reps<2&&topKg>=curTM*0.9) return;
-    }
-    var v=setEstFrom(topKg,reps);
-    if(v>amrapBestThisCycle){
-      amrapBestThisCycle=v;
-      amrapBestSrc=toDisp(topKg,st.cfg.unit)+toLbl(st.cfg.unit)+"×"+reps+(week?(" W"+week):"");
-    }
-  }
-  (st.prs[lift]||[]).forEach(function(p){
-    if(!p||Number(p.cycle)!==curCycleNum) return;
-    considerCycleAmrap(p.topWt,p.amrap,p.week);
-  });
-  (st.history||[]).forEach(function(e){
-    if(!e||Number(e.cycle)!==curCycleNum) return;
-    if(resolveLiftKey(e)!==lift) return;
-    considerCycleAmrap(parseTopKg(e.topSet),e.amrap,e.week);
-  });
-  var cycleBestE1RM=0;
-  var cycleBestSrc="";
-  if(curTM>0){
-    cycleBestE1RM=Math.round(curTM);
-    cycleBestSrc="TM";
-    if(amrapBestThisCycle>cycleBestE1RM){
-      cycleBestE1RM=amrapBestThisCycle;
-      cycleBestSrc=amrapBestSrc;
-    }
-  }else if(amrapBestThisCycle>0){
-    cycleBestE1RM=amrapBestThisCycle;
-    cycleBestSrc=amrapBestSrc;
-  }
+  var cycleBestE1RM=curTM>0?Math.round(curTM/0.9):0;
+  var cycleBestSrc=curTM>0?"TM÷0.9":"";
   // All-time PB: real sets across all cycles (separate from cycle e1RM)
   var allTimeBestE1RM=0;
   (st.prs[lift]||[]).forEach(function(p){
@@ -2535,50 +2518,13 @@ function App(){
       h("div",{style:{display:"flex",flexDirection:"column",gap:8}},
         LIFTS.map(function(l){
           var tmv=st.tms[l]||0;
-          var amrapBest=0;
-          function takeCycleSet(top,reps,week){
-            top=Number(top)||0; reps=parseInt(reps,10)||0; week=Number(week)||0;
-            if(week===4||top<=0||reps<=0) return;
-            if(tmv>0){
-              if(top>tmv*1.08||top<tmv*0.55) return;
-              if(reps<2&&top>=tmv*0.9) return;
-            }
-            var v=epley(top,reps);
-            if(v>amrapBest) amrapBest=v;
-          }
-          ((st.prs&&st.prs[l])||[]).forEach(function(pr){
-            if(!pr||Number(pr.cycle)!==Number(st.cycle)) return;
-            takeCycleSet(pr.topWt,pr.amrap,pr.week);
-          });
-          (st.history||[]).forEach(function(e){
-            if(!e||Number(e.cycle)!==Number(st.cycle)) return;
-            var lk=e.liftKey;
-            if(!lk&&e.lift){
-              var low=String(e.lift).toLowerCase();
-              if(low.indexOf("dead")>=0) lk="deadlift";
-              else if(low.indexOf("squat")>=0) lk="squat";
-              else if(low.indexOf("bench")>=0) lk="bench";
-              else if(low.indexOf("ohp")>=0||low==="press"||low.indexOf("overhead")>=0) lk="press";
-            }
-            if(lk!==l) return;
-            var top=0;
-            if(e.topSet){
-              var m=String(e.topSet).match(/([0-9]+(?:\.[0-9]+)?)/);
-              if(m) top=parseFloat(m[1]);
-              if(/lb/i.test(String(e.topSet))) top=fromDisp(top,"lbs");
-            }
-            takeCycleSet(top,e.amrap,e.week);
-          });
-          // Cycle e1RM = TM baseline; only raised by valid this-cycle working-set AMRAPs
-          var best=tmv?Math.round(tmv):0;
-          if(amrapBest>best) best=amrapBest;
-          var delta=tmv&&best?best-tmv:null;
+          // Estimated true 1RM for this cycle = TM ÷ 0.9 (same as header Cycle e1RM)
+          var best=tmv?Math.round(tmv/0.9):0;
           return h("div",{key:l,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid var(--border)"}},
             h("span",{style:{fontWeight:700,fontSize:13}},LIFT_LABELS[l]),
             h("div",{style:{display:"flex",gap:12,alignItems:"baseline",fontSize:12}},
               h("span",{style:{color:"var(--muted)"}},"TM "+(tmv?toDisp(tmv,st.cfg.unit):"—")),
               h("span",{style:{color:"var(--gold)",fontWeight:700}},best?"e1RM "+toDisp(best,st.cfg.unit):"—" ),
-              delta!=null&&delta!==0&&h("span",{style:{color:delta>=0?"var(--green)":"var(--red)",fontWeight:700}},(delta>=0?"+":"")+toDisp(Math.abs(delta),st.cfg.unit))
             )
           );
         })
@@ -2864,22 +2810,41 @@ function App(){
           );
         })(),
 
-        // Backoff sets
+        // Backoff sets — FSL/SSL track the actual main-set weight (incl. overrides), not a fixed % of TM
         bo.length>0&&(function(){
-          var boBase=bo.map(function(set){return r5(tm*set.pct);});
+          var variant=st.cfg.variant;
+          var anchorWt=null;
+          if(variant==="fsl"){
+            // First Set Last: same weight as main set 1 (index 0), after any edit
+            anchorWt=msActualWt(0);
+          }else if(variant==="ssl"){
+            // Second Set Last: same weight as main set 2 (index 1)
+            anchorWt=msActualWt(1);
+          }
+          var boBase=bo.map(function(set){
+            if(anchorWt!=null&&anchorWt>0) return r5(anchorWt);
+            return r5(tm*set.pct);
+          });
           var boGroupKey=sk+"_bo";
-          var hasOverride=boBase.some(function(_,i){return st.weightOverrides&&st.weightOverrides[boGroupKey+i]!==undefined;});
+          // For FSL/SSL, "override" only if user manually edited a backoff set away from the main-set anchor
+          var hasOverride=boBase.some(function(_,i){
+            if(!(st.weightOverrides&&st.weightOverrides[boGroupKey+i]!==undefined)) return false;
+            if(anchorWt!=null) return Math.abs(st.weightOverrides[boGroupKey+i]-boBase[i])>0.01;
+            return true;
+          });
           return h("div",{style:{marginTop:12,paddingTop:12,borderTop:"1px solid var(--border)"}},
             h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}},
-              h("div",{style:{fontSize:9,color:"var(--muted)",fontWeight:600,letterSpacing:1,textTransform:"uppercase"}},bo[0].label),
+              h("div",{style:{fontSize:9,color:"var(--muted)",fontWeight:600,letterSpacing:1,textTransform:"uppercase"}},bo[0].label+(anchorWt!=null?" (tracks main set)":"")),
               hasOverride&&h("button",{style:{fontSize:9,fontWeight:700,color:"var(--muted)",background:"none",border:"1px solid var(--border)",borderRadius:6,padding:"2px 7px"},onClick:function(){resetWeightCascade(boGroupKey,boBase.length);}},"Reset")
             ),
             h("div",{style:{display:"flex",gap:6,flexWrap:"wrap"}},
               bo.map(function(set,i){
-                var actualWt=(st.weightOverrides&&st.weightOverrides[boGroupKey+i]!==undefined)?st.weightOverrides[boGroupKey+i]:boBase[i];
+                // Prefer live anchor (FSL/SSL) unless user has a manual backoff override that differs
+                var stored=st.weightOverrides&&st.weightOverrides[boGroupKey+i];
+                var actualWt=(stored!==undefined&&(anchorWt==null||Math.abs(stored-boBase[i])>0.01))?stored:boBase[i];
                 var dw=toDisp(actualWt,st.cfg.unit);
                 var boKey=sk+"_bo"+i,done=!!st.checks[boKey];
-                var isOverridden=st.weightOverrides&&st.weightOverrides[boGroupKey+i]!==undefined;
+                var isOverridden=stored!==undefined&&(anchorWt==null||Math.abs(stored-boBase[i])>0.01);
                 var lp=makeLongPress(function(){
                   setEditPop({groupKey:boGroupKey,index:i,groupSize:boBase.length,value:dw,baseWeights:boBase});
                 },500);
@@ -3645,23 +3610,31 @@ function App(){
     timer&&h(RestTimer,{secs:timer.secs,onClose:function(){setTimer(null);}}),
     tmRec&&h("div",{style:{position:"fixed",inset:0,zIndex:300,background:"rgba(0,0,0,0.75)",display:"flex",alignItems:"flex-end",justifyContent:"center"},onClick:function(e){if(e.target===e.currentTarget){ /* keep open until explicit */ }}},
       h("div",{style:{background:"var(--card)",border:"1px solid var(--border)",borderRadius:"16px 16px 0 0",padding:"18px 16px 28px",width:"100%",maxWidth:520,maxHeight:"88vh",overflowY:"auto"}},
-        h("div",{style:{fontWeight:900,fontSize:18,marginBottom:4}},"TM recommendations"),
+        h("div",{style:{fontWeight:900,fontSize:18,marginBottom:4}},tmRec.summary?"End of cycle — TM summary":"TM recommendations"),
         h("div",{style:{fontSize:12,color:"var(--muted)",marginBottom:14}},
           tmRec.onlyLifts&&tmRec.onlyLifts.length===1
-            ? ("Week 3 "+(LIFT_LABELS[tmRec.onlyLifts[0]]||tmRec.onlyLifts[0])+" — set TM for next cycle (−5% / stay / +5%). Once per cycle.")
-            : ("Cycle "+tmRec.cycle+" — week 3 top sets. Pick −5% / stay / +5%.")
+            ? ("Week 3 "+(LIFT_LABELS[tmRec.onlyLifts[0]]||tmRec.onlyLifts[0])+" — Wendler: +2.5kg upper / +5kg lower, or stay / −5% / reset.")
+            : ("Cycle "+tmRec.cycle+" summary — upper +2.5kg, lower +5kg. Stall → stay / −5% / reset to 90% e1RM.")
         ),
         LIFTS.map(function(l){
           var rec=tmRec.recs[l];
           if(!rec) return null;
           var pick=(tmRec.picks&&tmRec.picks[l])||rec.action;
           var tmNow=Number(st.tms[l])||0;
+          var bump=rec.bump!=null?rec.bump:wendlerBumpKg(l);
           var preview=tmNow;
-          if(pick==="up") preview=r5(tmNow*1.05);
+          if(pick==="up") preview=r5(tmNow+bump);
           else if(pick==="down") preview=r5(tmNow*0.95);
-          return h("div",{key:l,style:{border:"1px solid var(--border)",borderRadius:10,padding:"12px",marginBottom:10}},
+          else if(pick==="reset") preview=rec.resetTM||(rec.week3Est?r5(rec.week3Est*0.9):tmNow);
+          var opts=[
+            {id:"down",label:"−5%"},
+            {id:"stay",label:"Stay"},
+            {id:"up",label:"+"+bump+"kg"},
+            {id:"reset",label:"Reset 90%"}
+          ];
+          return h("div",{key:l,style:{border:"1px solid "+(rec.stall?"rgba(231,76,60,0.5)":"var(--border)"),borderRadius:10,padding:"12px",marginBottom:10}},
             h("div",{style:{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}},
-              h("span",{style:{fontWeight:800}},LIFT_LABELS[l]),
+              h("span",{style:{fontWeight:800}},LIFT_LABELS[l],rec.stall?h("span",{style:{color:"var(--red)",fontSize:11,marginLeft:6}},"STALL"):null),
               h("span",{style:{fontSize:12,color:"var(--muted)"}},
                 "TM "+toDisp(tmNow,st.cfg.unit)+toLbl(st.cfg.unit),
                 (rec.top&&rec.reps)
@@ -3670,14 +3643,14 @@ function App(){
               )
             ),
             h("div",{style:{fontSize:11,color:"var(--muted)",marginBottom:8}},rec.reason),
-            h("div",{style:{display:"flex",gap:6,marginBottom:6}},
-              [{id:"down",label:"−5%"},{id:"stay",label:"Stay"},{id:"up",label:"+5%"}].map(function(opt){
+            h("div",{style:{display:"flex",gap:6,marginBottom:6,flexWrap:"wrap"}},
+              opts.map(function(opt){
                 var active=pick===opt.id;
-                var col=opt.id==="up"?"var(--green)":opt.id==="down"?"var(--red)":"var(--gold)";
+                var col=opt.id==="up"?"var(--green)":opt.id==="down"||opt.id==="reset"?"var(--red)":"var(--gold)";
                 return h("button",{
                   key:opt.id,
                   className:"sel-btn"+(active?" active":""),
-                  style:{flex:1,borderColor:active?col:undefined,color:active?col:undefined},
+                  style:{flex:"1 1 40%",minWidth:70,borderColor:active?col:undefined,color:active?col:undefined},
                   onClick:function(){
                     setTmRec(function(prev){
                       if(!prev) return prev;
