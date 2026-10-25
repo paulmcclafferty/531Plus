@@ -676,6 +676,7 @@ function ExNotes(p){
   var open=useState(false); var setOpen=open[1]; open=open[0];
   var histOpen=useState(false); var setHistOpen=histOpen[1]; histOpen=histOpen[0];
   var entries=(exHistory&&exHistory[label])||[];
+  var hasNote=!!(notes&&notes[exKey]&&String(notes[exKey]).trim());
   function save(){
     var txt=((notes&&notes[exKey])||"").trim();
     if(!txt)return;
@@ -685,24 +686,57 @@ function ExNotes(p){
       return updated;
     });
   }
+  function clearNote(){
+    onNoteChange(exKey,"");
+  }
+  function deleteHistoryEntry(idx){
+    setExHistory(function(prev){
+      var updated=Object.assign({},prev);
+      var list=(prev[label]||[]).slice();
+      list.splice(idx,1);
+      if(list.length) updated[label]=list;
+      else delete updated[label];
+      return updated;
+    });
+  }
+  function clearAllHistory(){
+    if(!entries.length) return;
+    if(!window.confirm("Delete all saved notes for "+label+"?")) return;
+    setExHistory(function(prev){
+      var updated=Object.assign({},prev);
+      delete updated[label];
+      return updated;
+    });
+  }
   return h("div",{style:{marginTop:8}},
     h("div",{className:"flex-row",style:{gap:6}},
       h("button",{className:"notes-toggle",onClick:function(){setOpen(function(o){return !o;})}},
-        (open?"Hide":"Show")+" Notes"+(notes&&notes[exKey]?" *":"")),
+        (open?"Hide":"Show")+" Notes"+(hasNote?" *":"")),
       entries.length>0&&h("button",{className:"notes-toggle",style:{color:"var(--blue)",borderColor:"var(--blue)"},onClick:function(){setHistOpen(function(o){return !o;})}},
         "History ("+entries.length+")")
     ),
     open&&h("div",{style:{marginTop:6}},
       h("textarea",{rows:2,placeholder:placeholder,value:(notes&&notes[exKey])||"",onChange:function(e){onNoteChange(exKey,e.target.value)}}),
-      h("div",{style:{display:"flex",justifyContent:"flex-end",marginTop:4}},
+      h("div",{style:{display:"flex",justifyContent:"flex-end",gap:6,marginTop:4}},
+        hasNote&&h("button",{className:"btn btn-ghost btn-sm",style:{color:"var(--red)",borderColor:"var(--red)"},onClick:clearNote},"Delete"),
         h("button",{className:"btn btn-green btn-sm",onClick:save},"Save Note"))
     ),
     histOpen&&h("div",{style:{marginTop:6,background:"#0d0d0d",border:"1px solid var(--border)",borderRadius:3,padding:"8px 10px"}},
-      h("div",{style:{fontSize:10,fontWeight:700,letterSpacing:1,textTransform:"uppercase",color:"var(--muted)",marginBottom:8}},label+" — History"),
+      h("div",{style:{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}},
+        h("div",{style:{fontSize:10,fontWeight:700,letterSpacing:1,textTransform:"uppercase",color:"var(--muted)"}},label+" — History"),
+        entries.length>0&&h("button",{className:"btn btn-ghost btn-sm",style:{color:"var(--red)",fontSize:10,minHeight:28,padding:"2px 8px"},onClick:clearAllHistory},"Clear all")
+      ),
       entries.map(function(e,i){
-        return h("div",{key:i,className:"hist-entry"},
-          h("div",{className:"hist-date"},e.date),
-          h("div",{className:"hist-text"},e.note)
+        return h("div",{key:i,className:"hist-entry",style:{display:"flex",gap:8,alignItems:"flex-start"}},
+          h("div",{style:{flex:1}},
+            h("div",{className:"hist-date"},e.date),
+            h("div",{className:"hist-text"},e.note)
+          ),
+          h("button",{
+            className:"btn btn-ghost btn-sm",
+            style:{color:"var(--red)",fontSize:10,minHeight:28,padding:"2px 8px",flexShrink:0},
+            onClick:function(){deleteHistoryEntry(i);}
+          },"Delete")
         );
       })
     )
@@ -1514,8 +1548,8 @@ function App(){
       if(saved.current.day==null||saved.current.day<0) saved.current.day=saved.day;
       if(saved.current.day>maxD) saved.current.day=maxD;
     }
-    // Repair PR e1RMs: older imports sometimes stored top-set weight as est.
-    // Recalculate from topWt × amrap via Epley when est ≈ topWt (not a real e1RM).
+    // Repair PR e1RMs: always prefer Epley(topWt, amrap) when both exist.
+    // Fixes imports that stored Sarasoft "Actual" or a bad e1RM column as est.
     LIFTS.forEach(function(l){
       var list=saved.prs[l];
       if(!list||!list.length) return;
@@ -1524,14 +1558,14 @@ function App(){
         var top=Number(pr.topWt)||0;
         var reps=parseInt(pr.amrap,10)||0;
         var est=Number(pr.est)||0;
-        if(top>0&&reps>1){
-          var recalc=epley(top,reps);
-          // If stored est is missing, or looks like the working weight itself, fix it
-          if(!est||(est<=top*1.05&&recalc>est)){
-            return Object.assign({},pr,{est:recalc,cycle:Number(pr.cycle)||pr.cycle,week:Number(pr.week)||pr.week});
-          }
+        if(top>0&&reps>0){
+          est=epley(top,reps);
         }
-        return Object.assign({},pr,{cycle:Number(pr.cycle)||pr.cycle,week:Number(pr.week)||pr.week,est:est||pr.est});
+        return Object.assign({},pr,{
+          cycle:Number(pr.cycle)||pr.cycle,
+          week:Number(pr.week)||pr.week,
+          est:est||pr.est
+        });
       });
     });
   }catch(e){ saved=DEFAULT; }
@@ -1711,7 +1745,7 @@ function App(){
       }
     }
   }
-  function setNote(k,v){setSt(function(p){var n=Object.assign({},p.notes);n[k]=v;return Object.assign({},p,{notes:n});});}
+  function setNote(k,v){setSt(function(p){var n=Object.assign({},p.notes);if(!v||!String(v).trim()){delete n[k];}else{n[k]=v;}return Object.assign({},p,{notes:n});});}
   function setAmrap(k,v){setSt(function(p){var a=Object.assign({},p.amraps);a[k]=v;return Object.assign({},p,{amraps:a});});}
   function setWeightOverride(k,v){setSt(function(p){var w=Object.assign({},p.weightOverrides||{});if(v===null){delete w[k];}else{w[k]=v;}return Object.assign({},p,{weightOverrides:w});});}
   var focusMode = !!(st.cfg&&st.cfg.focusMode);
@@ -2058,13 +2092,70 @@ function App(){
   // Warmup sets helper
   function warmupSets(tm){return [{pct:.40,reps:5},{pct:.50,reps:5},{pct:.60,reps:5}].map(function(s){return Object.assign({},s,{wt:r5(tm*s.pct)});});}
 
-  // PB / cycle-best targets for the AMRAP set, so the user can see live what rep count is needed
+  // PB / cycle-best: always recompute from weight×reps when available (don't trust a stale/wrong est field)
+  function effectiveEst(p){
+    if(!p) return 0;
+    var top=Number(p.topWt)||0;
+    var reps=parseInt(p.amrap,10)||0;
+    if(top>0&&reps>0) return epley(top,reps);
+    return Number(p.est)||0;
+  }
+  function estFromHistoryEntry(e){
+    if(!e) return 0;
+    var reps=parseInt(e.amrap,10)||0;
+    if(!reps||e.amrap==="—") return 0;
+    var top=0;
+    if(e.topSet){
+      var m=String(e.topSet).match(/([0-9]+(?:\.[0-9]+)?)/);
+      if(m){
+        var val=parseFloat(m[1]);
+        if(/lb/i.test(String(e.topSet))) top=fromDisp(val,"lbs");
+        else top=fromDisp(val,"kg");
+      }
+    }
+    if(top>0&&reps>0) return epley(top,reps);
+    return 0;
+  }
   var liftPRs=st.prs[lift]||[];
-  // Coerce cycle to number — CSV import / JSON restore can leave string cycle ids
   var curCycleNum=Number(st.cycle);
-  var allTimeBestE1RM=liftPRs.length?Math.max.apply(null,liftPRs.map(function(p){return Number(p.est)||0;})):0;
-  var cyclePRs=liftPRs.filter(function(p){return Number(p.cycle)===curCycleNum;});
-  var cycleBestE1RM=cyclePRs.length?Math.max.apply(null,cyclePRs.map(function(p){return Number(p.est)||0;})):0;
+  var allTimeBestE1RM=0;
+  liftPRs.forEach(function(p){ var v=effectiveEst(p); if(v>allTimeBestE1RM) allTimeBestE1RM=v; });
+  var cycleBestE1RM=0;
+  liftPRs.forEach(function(p){
+    if(Number(p.cycle)!==curCycleNum) return;
+    var v=effectiveEst(p);
+    if(v>cycleBestE1RM) cycleBestE1RM=v;
+  });
+  // Also scan history for this lift+cycle (covers cases where prs[] has a bad est or wrong cycle tag on an old row)
+  (st.history||[]).forEach(function(e){
+    if(Number(e.cycle)!==curCycleNum) return;
+    var lk=e.liftKey||null;
+    if(!lk&&e.lift){
+      var low=String(e.lift).toLowerCase();
+      if(low.indexOf("dead")>=0) lk="deadlift";
+      else if(low.indexOf("squat")>=0) lk="squat";
+      else if(low.indexOf("bench")>=0) lk="bench";
+      else if(low.indexOf("press")>=0||low.indexOf("ohp")>=0) lk="press";
+    }
+    if(lk!==lift) return;
+    var v=estFromHistoryEntry(e);
+    if(v>cycleBestE1RM) cycleBestE1RM=v;
+    if(v>allTimeBestE1RM) allTimeBestE1RM=v;
+  });
+  // History all-time (other cycles) for PB baseline
+  (st.history||[]).forEach(function(e){
+    var lk=e.liftKey||null;
+    if(!lk&&e.lift){
+      var low=String(e.lift).toLowerCase();
+      if(low.indexOf("dead")>=0) lk="deadlift";
+      else if(low.indexOf("squat")>=0) lk="squat";
+      else if(low.indexOf("bench")>=0) lk="bench";
+      else if(low.indexOf("press")>=0||low.indexOf("ohp")>=0) lk="press";
+    }
+    if(lk!==lift) return;
+    var v=estFromHistoryEntry(e);
+    if(v>allTimeBestE1RM) allTimeBestE1RM=v;
+  });
 
   // Minimum whole reps so that epley(weight, r) >= targetE1RM.
   // Must use the same rounded Epley as stored PRs / live comparisons — a pure
@@ -2187,7 +2278,12 @@ function App(){
         LIFTS.map(function(l){
           var tmv=st.tms[l];
           var cPRs=((st.prs&&st.prs[l])||[]).filter(function(pr){return pr&&Number(pr.cycle)===Number(st.cycle);});
-          var best=cPRs.length?Math.max.apply(null,cPRs.map(function(pr){return pr.est;})):0;
+          var best=0;
+          cPRs.forEach(function(pr){
+            var top=Number(pr.topWt)||0, reps=parseInt(pr.amrap,10)||0;
+            var v=(top>0&&reps>0)?epley(top,reps):(Number(pr.est)||0);
+            if(v>best) best=v;
+          });
           var delta=tmv&&best?best-tmv:null;
           return h("div",{key:l,style:{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"6px 0",borderBottom:"1px solid var(--border)"}},
             h("span",{style:{fontWeight:700,fontSize:13}},LIFT_LABELS[l]),
