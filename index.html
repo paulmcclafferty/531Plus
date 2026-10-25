@@ -126,7 +126,7 @@ var h=React.createElement, useState=React.useState, useEffect=React.useEffect, u
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
 // Bump on every release — header compares this to the live deploy
-var APP_VERSION="3.21";
+var APP_VERSION="3.23";
 var LIFTS=["squat","bench","deadlift","press"];
 var LIFT_LABELS={squat:"Squat",bench:"Bench",deadlift:"Deadlift",press:"OHP"};
 var DAY_LABELS=["Squat","Bench","Deadlift","OHP"];
@@ -1767,9 +1767,10 @@ function App(){
     }
     return {action:"stay",pct:0,newTM:Math.round(tm),week3Est:est,top:top,reps:reps,week:week,reason:setLabel};
   }
-  function buildTMRecommendations(state, cycleNum){
+  function buildTMRecommendations(state, cycleNum, onlyLifts){
     var out={};
-    LIFTS.forEach(function(l){
+    var list=onlyLifts&&onlyLifts.length?onlyLifts:LIFTS;
+    list.forEach(function(l){
       var tm=Number(state.tms&&state.tms[l])||0;
       var setInfo=cycleTopSetAmrap(state,l,cycleNum);
       var rec=recommendTM(tm,setInfo);
@@ -1777,28 +1778,31 @@ function App(){
     });
     return out;
   }
-  function openTMRecModal(cycleNum, afterApply){
-    var recs=buildTMRecommendations(st, cycleNum);
+  // onlyLifts: optional array — week 3 Log & Exit asks per lift, once per cycle
+  function openTMRecModal(cycleNum, afterApply, onlyLifts, stateSnap){
+    var base=stateSnap||st;
+    var recs=buildTMRecommendations(base, cycleNum, onlyLifts);
     var picks={};
-    LIFTS.forEach(function(l){
-      if(recs[l]) picks[l]=recs[l].action;
-    });
-    setTmRec({cycle:cycleNum,recs:recs,picks:picks,afterApply:afterApply||null});
+    Object.keys(recs).forEach(function(l){ picks[l]=recs[l].action; });
+    setTmRec({cycle:cycleNum,recs:recs,picks:picks,afterApply:afterApply||null,onlyLifts:onlyLifts||null});
   }
   function applyTMRecommendations(){
     if(!tmRec) return;
     var after=tmRec.afterApply;
+    var liftsToApply=tmRec.onlyLifts&&tmRec.onlyLifts.length?tmRec.onlyLifts:LIFTS;
+    var cyc=tmRec.cycle;
     setSt(function(p){
       var nt=Object.assign({},p.tms);
-      LIFTS.forEach(function(l){
+      var adj=Object.assign({},p.tmAdj||{});
+      liftsToApply.forEach(function(l){
         var pick=(tmRec.picks&&tmRec.picks[l])||"stay";
         var tm=Number(nt[l])||0;
         if(!tm) return;
         if(pick==="up") nt[l]=r5(tm*1.05);
         else if(pick==="down") nt[l]=r5(tm*0.95);
-        // stay: unchanged
+        adj[l]=cyc; // mark TM decided for this lift this cycle
       });
-      var patch={tms:nt};
+      var patch={tms:nt,tmAdj:adj};
       if(after) Object.assign(patch, after);
       return Object.assign({},p,patch);
     });
@@ -1817,18 +1821,22 @@ function App(){
         var nc2={cycle:cycle,week:week+1,day:0};
         return Object.assign({},p,{week:week+1,day:0,totalWeeks:newTotal,current:nc2});
       }
-      // End of cycle — do NOT auto-bump TMs. Recommendations modal handles ±5%/stay.
-      return p;
+      // End of deload → next cycle. TMs already set after each week-3 log.
+      var nc3={cycle:cycle+1,week:1,day:0};
+      return Object.assign({},p,{week:1,day:0,cycle:cycle+1,totalWeeks:newTotal,current:nc3});
     });
-    // After week 4, open TM recommendations then advance cycle on apply
-    if(st.week>=4){
-      var cyc=st.cycle;
-      openTMRecModal(cyc, {
+  }
+  function skipDeload(){
+    // Skip deload → next cycle. TMs already handled on week 3 — no second TM prompt.
+    var cyc=st.cycle;
+    setSt(function(p){
+      return Object.assign({},p,{
         week:1, day:0, cycle:cyc+1,
-        totalWeeks:(st.totalWeeks||0)+1,
+        totalWeeks:(p.totalWeeks||0)+1,
         current:{cycle:cyc+1, week:1, day:0}
       });
-    }
+    });
+    setTab("home");
   }
 
   function goBack(){
@@ -2149,21 +2157,32 @@ function App(){
       setTab("history");
       return;
     }
-    // Last session of the cycle (last day of week 4) → TM recommendations for every lift
-    var maxDLog = dayCount(st.cfg) - 1;
-    var endingCycle = (st.week >= 4 && st.day >= maxDLog) ? st.cycle : null;
-    // Also when finishing last day of week 3: preview recs (mid/end training block) without forcing advance
-    if(!endingCycle && st.week === 3 && st.day >= maxDLog){
-      endingCycle = st.cycle;
-    }
-    // Auto-backup is triggered from the Log button click (same user gesture) so iOS
-    // actually downloads instead of opening a preview sheet. See logAndExit().
+    // TM change once per cycle per lift — only after that lift's week 3 (1+) Log & Exit
+    var justLoggedLift=lift;
+    var justLoggedCycle=st.cycle;
+    var isWeek3=st.week===3;
+    var alreadyAdj=st.tmAdj&&st.tmAdj[justLoggedLift]===justLoggedCycle;
     setTab("home");
-    if(endingCycle!=null){
-      // Use state after this log: week 3 data for endingCycle is complete for this lift
+    if(isWeek3&&!alreadyAdj){
+      // Snapshot includes this log so e1RM uses the set just saved
+      var histSnap=[entry].concat(st.history||[]);
+      var prsSnap=Object.assign({},st.prs);
+      if(est){
+        var pl=(prsSnap[lift]||[]).slice();
+        var found=false;
+        for(var pi=0;pi<pl.length;pi++){
+          if(pl[pi].cycle===st.cycle&&pl[pi].week===3){
+            pl[pi]=Object.assign({},pl[pi],{est:est,tm:tm,topWt:topWt,amrap:ar,date:entryDate});
+            found=true; break;
+          }
+        }
+        if(!found) pl=pl.concat([{cycle:st.cycle,week:3,est:est,tm:tm,topWt:topWt,amrap:ar,date:entryDate}]);
+        prsSnap[lift]=pl;
+      }
+      var snap=Object.assign({},st,{history:histSnap,prs:prsSnap});
       setTimeout(function(){
-        openTMRecModal(endingCycle, null);
-      }, 300);
+        openTMRecModal(justLoggedCycle, null, [justLoggedLift], snap);
+      }, 200);
     }
   }
   function undoLastLog(){
@@ -2627,6 +2646,21 @@ function App(){
         return h("div",{key:i,style:{width:st.day===i?16:6,height:6,borderRadius:3,background:st.day===i?"var(--gold)":"var(--border)",transition:"all .2s"}});
       }),
       h("button",{className:"sel-btn"+(focusMode?" active":""),style:{marginLeft:12,fontSize:10,padding:"4px 10px",minHeight:28},onClick:toggleFocusMode},focusMode?"Focus ON":"Focus")
+    ),
+    // First deload session: option to skip into next cycle (not recommended)
+    st.week===4&&st.day===0&&!editingHist&&h("div",{style:{background:"rgba(231,76,60,0.1)",border:"1px solid rgba(231,76,60,0.45)",borderRadius:10,padding:"12px 14px",marginBottom:10}},
+      h("div",{style:{fontWeight:800,fontSize:13,marginBottom:4}},"Deload week"),
+      h("div",{style:{fontSize:12,color:"var(--muted)",marginBottom:10,lineHeight:1.4}},
+        "Light recovery sets this week. Skipping is possible but not recommended — you lose the recovery benefit before the next cycle."
+      ),
+      h("button",{
+        className:"btn btn-ghost btn-sm",
+        style:{color:"var(--red)",borderColor:"var(--red)",width:"100%"},
+        onClick:function(){
+          if(!window.confirm("Skip deload and start the next cycle?\n\nNot recommended — deload helps recovery. TM recommendations will still appear.")) return;
+          skipDeload();
+        }
+      },"Skip deload (not recommended)")
     ),
     // Sticky session strip
     tm>0&&h("div",{style:{position:"sticky",top:52,zIndex:90,background:"rgba(18,18,18,0.95)",backdropFilter:"blur(8px)",border:"1px solid var(--border)",borderRadius:10,padding:"8px 12px",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",gap:8,flexWrap:"wrap"}},
@@ -3613,7 +3647,9 @@ function App(){
       h("div",{style:{background:"var(--card)",border:"1px solid var(--border)",borderRadius:"16px 16px 0 0",padding:"18px 16px 28px",width:"100%",maxWidth:520,maxHeight:"88vh",overflowY:"auto"}},
         h("div",{style:{fontWeight:900,fontSize:18,marginBottom:4}},"TM recommendations"),
         h("div",{style:{fontSize:12,color:"var(--muted)",marginBottom:14}},
-          "Cycle "+tmRec.cycle+" — based on each lift's week 3 top-set e1RM. Pick −5% / stay / +5%, then apply."
+          tmRec.onlyLifts&&tmRec.onlyLifts.length===1
+            ? ("Week 3 "+(LIFT_LABELS[tmRec.onlyLifts[0]]||tmRec.onlyLifts[0])+" — set TM for next cycle (−5% / stay / +5%). Once per cycle.")
+            : ("Cycle "+tmRec.cycle+" — week 3 top sets. Pick −5% / stay / +5%.")
         ),
         LIFTS.map(function(l){
           var rec=tmRec.recs[l];
@@ -3660,12 +3696,18 @@ function App(){
         }),
         h("div",{style:{display:"flex",gap:8,marginTop:8}},
           h("button",{className:"btn btn-ghost",style:{flex:1},onClick:function(){
-            // Dismiss: still run afterApply (e.g. advance cycle) without changing TMs
+            // Keep TMs but mark lifts as decided so we don't ask again this cycle
             var after=tmRec.afterApply;
+            var liftsKeep=tmRec.onlyLifts&&tmRec.onlyLifts.length?tmRec.onlyLifts:Object.keys(tmRec.recs||{});
+            var cycKeep=tmRec.cycle;
             setTmRec(null);
-            if(after){
-              setSt(function(p){ return Object.assign({},p,after); });
-            }
+            setSt(function(p){
+              var adj=Object.assign({},p.tmAdj||{});
+              liftsKeep.forEach(function(l){ adj[l]=cycKeep; });
+              var patch={tmAdj:adj};
+              if(after) Object.assign(patch, after);
+              return Object.assign({},p,patch);
+            });
           }},"Keep TMs"),
           h("button",{className:"btn btn-gold",style:{flex:1},onClick:applyTMRecommendations},"Apply")
         )
