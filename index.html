@@ -126,7 +126,7 @@ var h=React.createElement, useState=React.useState, useEffect=React.useEffect, u
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
 // Bump on every release — header compares this to the live deploy
-var APP_VERSION="3.26";
+var APP_VERSION="3.27";
 var LIFTS=["squat","bench","deadlift","press"];
 var LIFT_LABELS={squat:"Squat",bench:"Bench",deadlift:"Deadlift",press:"OHP"};
 var DAY_LABELS=["Squat","Bench","Deadlift","OHP"];
@@ -939,7 +939,10 @@ function WeightEditPopover(props){
   return h("div",{style:{position:"fixed",inset:0,background:"rgba(0,0,0,.6)",zIndex:400,display:"flex",alignItems:"center",justifyContent:"center",padding:20},onClick:onCancel},
     h("div",{className:"card",style:{maxWidth:320,width:"100%"},onClick:function(e){e.stopPropagation();}},
       h("div",{style:{fontWeight:700,fontSize:14,marginBottom:4}},"Edit weight"),
-      h("p",{style:{color:"var(--muted)",fontSize:11,marginBottom:14}},"− / + adjusts by "+step+unit+". Or type any weight. Cascades to later sets in this group."),
+      h("p",{style:{color:"var(--muted)",fontSize:11,marginBottom:14}},
+        "− / + adjusts by "+step+unit+". Or type any weight."+
+        (props.cascade===false?" Main sets only — FSL tracks set 1.":" Cascades to later sets in this group.")
+      ),
       h("div",{style:{display:"flex",gap:10,alignItems:"center",marginBottom:16}},
         h("button",{
           type:"button",
@@ -1924,26 +1927,23 @@ function App(){
   function toggleFocusMode(){
     setSt(function(p){return Object.assign({},p,{cfg:Object.assign({},p.cfg,{focusMode:!p.cfg.focusMode})});});
   }
-  // Apply an edited display-weight at `index` within a group, cascading the same
-  // delta (in storage units, i.e. kg) forward to every later index in that group.
-  function applyWeightCascade(groupKey,fromIndex,groupSize,newDisplayWt,baseWeights,currentDisplayWt,actualWeights){
-    // Delta is computed against what the user actually SAW and edited (currentDisplayWt,
-    // i.e. the possibly-already-overridden value shown in the popover) — not the original
-    // calculated base. Otherwise a second edit on an already-overridden set silently drifts:
-    // typing "78" over a displayed "80" must save as exactly 78, not some other number derived
-    // from a stale baseline the user never saw.
+  // Main 5/3/1 sets: cascadeForward=false → only the edited set changes (FSL tracks set 1 separately).
+  // Warmup / FSL / BBB: cascadeForward=true → same delta to later sets in that group.
+  function applyWeightCascade(groupKey,fromIndex,groupSize,newDisplayWt,baseWeights,currentDisplayWt,actualWeights,cascadeForward){
     var newKg=fromDisp(newDisplayWt,st.cfg.unit);
     var currentKg=fromDisp(currentDisplayWt,st.cfg.unit);
     var deltaKg=newKg-currentKg;
+    var doCascade=cascadeForward!==false;
     setSt(function(p){
       var w=Object.assign({},p.weightOverrides||{});
-      for(var i=fromIndex;i<groupSize;i++){
-        var k=groupKey+i;
-        // Shift forward from each later set's CURRENT actual weight (respecting any prior
-        // override on it), not the original calculated base — so earlier edits on other
-        // sets in the group are preserved exactly rather than being recomputed from scratch.
-        var currentActual=actualWeights[i];
-        w[k]=r5(currentActual+deltaKg);
+      if(!doCascade){
+        w[groupKey+fromIndex]=r5(newKg);
+      }else{
+        for(var i=fromIndex;i<groupSize;i++){
+          var k=groupKey+i;
+          var currentActual=actualWeights[i];
+          w[k]=r5(currentActual+deltaKg);
+        }
       }
       return Object.assign({},p,{weightOverrides:w});
     });
@@ -2706,7 +2706,7 @@ function App(){
               var isNext = !done && ms.slice(0,si).every(function(_,j){return !!st.checks[sk+"s"+j+"_done"];});
               return h("tr",{key:si,style:{borderBottom:"1px solid var(--border)",opacity:done?0.4:1,background:isNext?"rgba(255,215,0,0.08)":undefined,boxShadow:isNext?"inset 3px 0 0 var(--gold)":undefined}},
                 h("td",{className:"set-cell",style:{padding:"10px 6px",fontWeight:700,fontSize:12}},si+1),
-                h("td",{className:"set-cell",style:{padding:"10px 6px",cursor:"pointer"},onClick:function(){setEditPop({groupKey:msGroupKey,index:si,groupSize:msBase.length,value:dw,baseWeights:msBase});}},
+                h("td",{className:"set-cell",style:{padding:"10px 6px",cursor:"pointer"},onClick:function(){setEditPop({groupKey:msGroupKey,index:si,groupSize:msBase.length,value:dw,baseWeights:msBase,noCascade:true});}},
                   h("div",null,
                     h("span",{className:"wt-num",style:{color:isOverridden?"var(--blue)":undefined,borderBottom:"1px dotted "+(isOverridden?"var(--blue)":"var(--muted)")}},dw),
                     h("span",{style:{color:"var(--muted)",fontSize:10,marginLeft:2}},Math.round(set.pct*100)+"%"+(isOverridden?" \u00b7edit":""))
@@ -3693,16 +3693,16 @@ function App(){
     editPop&&h(WeightEditPopover,{
       value:editPop.value,
       unit:toLbl(st.cfg.unit),
+      cascade:!editPop.noCascade,
       onCancel:function(){setEditPop(null);},
       onConfirm:function(newVal){
-        // Build the current actual (override-aware) weight for every index in this group,
-        // so the cascade shifts from what's really displayed right now, not the stale
-        // original calculated numbers — see applyWeightCascade's comment for why this matters.
         var actualWeights=editPop.baseWeights.map(function(base,i){
           var k=editPop.groupKey+i;
           return (st.weightOverrides&&st.weightOverrides[k]!==undefined)?st.weightOverrides[k]:base;
         });
-        applyWeightCascade(editPop.groupKey,editPop.index,editPop.groupSize,newVal,editPop.baseWeights,editPop.value,actualWeights);
+        // Main 5/3/1 sets: noCascade — only this set changes; FSL still tracks set 1.
+        // Warmup / FSL / BBB groups: cascade delta to later sets in that group.
+        applyWeightCascade(editPop.groupKey,editPop.index,editPop.groupSize,newVal,editPop.baseWeights,editPop.value,actualWeights,!editPop.noCascade);
       }
     }),
     header,
