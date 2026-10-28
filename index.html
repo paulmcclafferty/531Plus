@@ -126,7 +126,7 @@ var h=React.createElement, useState=React.useState, useEffect=React.useEffect, u
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
 // Bump on every release — header compares this to the live deploy
-var APP_VERSION="3.30";
+var APP_VERSION="3.31";
 var LIFTS=["squat","bench","deadlift","press"];
 var LIFT_LABELS={squat:"Squat",bench:"Bench",deadlift:"Deadlift",press:"OHP"};
 var DAY_LABELS=["Squat","Bench","Deadlift","OHP"];
@@ -312,11 +312,11 @@ var WODS={
       about:"Classic girl WOD. Search 'Nicole WOD'. Tracks pull-up endurance over time. Great upper body pull balance after bench."
     },
     {
-      name:"Angie",
-      rx:"For time: 100 pull-ups / 100 push-ups / 100 sit-ups / 100 air squats (in order)",
-      scaled:"For time: 50 ring rows / 100 knee push-ups / 100 sit-ups / 100 air squats",
-      begin:"For time: 50 ring rows / 50 knee push-ups / 75 sit-ups / 75 air squats",
-      about:"Classic girl WOD. Search 'Angie WOD'. All bodyweight. Must complete each movement before moving on. Sub-20min is solid."
+      name:"Lynne",
+      rx:"5 rounds: max bench press at bodyweight / max pull-ups — rest as needed between rounds",
+      scaled:"5 rounds: max bench press at 75% BW / max ring rows — rest as needed",
+      begin:"5 rounds: max bench press at 50% BW / max ring rows — rest as needed",
+      about:"Search 'Lynne WOD'. Score is total reps. Bench + pull-ups — correct pairing for bench day."
     },
   ],
   deadlift:[
@@ -356,11 +356,11 @@ var WODS={
       about:"Classic girl WOD. Search 'Isabel WOD'. Similar to Grace but snatches. Short sprint. Elite sub-2min."
     },
     {
-      name:"Lynne",
-      rx:"5 rounds: max bench press at bodyweight / max pull-ups — rest as needed between rounds",
-      scaled:"5 rounds: max bench press at 75% BW / max ring rows — rest as needed",
-      begin:"5 rounds: max bench press at 50% BW / max ring rows — rest as needed",
-      about:"Search 'Lynne WOD'. Score is total reps. No time component — quality over speed. Great active recovery on deadlift day."
+      name:"Linda",
+      rx:"10-9-8-7-6-5-4-3-2-1 for time: deadlift 1.5×BW / bench 1×BW / clean 0.75×BW",
+      scaled:"10-9-8-7-6-5-4-3-2-1 for time: deadlift ~BW / bench 0.75×BW / hang clean 0.5×BW",
+      begin:"10-9-8-7-6-5-4-3-2-1 for time: KB deadlift / push-ups / hang clean light",
+      about:"Classic girl WOD with deadlifts built in. Search 'Linda WOD'. Heavy hinge + pull — pairs with deadlift day."
     },
   ],
   press:[
@@ -372,18 +372,11 @@ var WODS={
       about:"Classic girl WOD. Search 'Elizabeth WOD'. Ring dips = overhead push pattern. Pairs well with OHP day. Sub-10min is solid."
     },
     {
-      name:"Lynne",
-      rx:"5 rounds: max bench press at bodyweight / max pull-ups — rest as needed between rounds",
-      scaled:"5 rounds: max bench press at 75% BW / max ring rows — rest as needed",
-      begin:"5 rounds: max bench press at 50% BW / max ring rows — rest as needed",
-      about:"Search 'Lynne WOD'. Score is total reps. No time component. Good push/pull balance after OHP."
-    },
-    {
       name:"Amanda",
       rx:"9-7-5 for time: muscle-ups / squat snatches 61kg",
       scaled:"9-7-5 for time: pull-ups + ring dips / power snatches 40kg",
       begin:"9-7-5 for time: ring rows + push-ups / hang power snatches 25kg",
-      about:"Classic girl WOD. Search 'Amanda WOD'. Short and very technical. Muscle-ups and overhead work = perfect OHP day."
+      about:"Classic girl WOD. Search 'Amanda WOD'. Short and technical. Overhead work pairs with OHP day."
     },
     {
       name:"DT",
@@ -405,6 +398,13 @@ var WODS={
       scaled:"For time: 100 thrusters 40kg — 5 burpees at start of every minute",
       begin:"For time: 75 thrusters 25kg — 3 burpees at start of every minute",
       about:"Named after NFL player/soldier Robert James Kalsu. Search 'Kalsu WOD'. Thruster = squat + overhead press. Brutal but famous."
+    },
+    {
+      name:"Angie",
+      rx:"For time: 100 pull-ups / 100 push-ups / 100 sit-ups / 100 air squats (in order)",
+      scaled:"For time: 50 ring rows / 100 knee push-ups / 100 sit-ups / 100 air squats",
+      begin:"For time: 50 ring rows / 50 knee push-ups / 75 sit-ups / 75 air squats",
+      about:"Classic girl WOD. Search 'Angie WOD'. Bodyweight density — pairs fine after OHP."
     },
   ],
 };
