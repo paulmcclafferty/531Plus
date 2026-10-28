@@ -126,7 +126,7 @@ var h=React.createElement, useState=React.useState, useEffect=React.useEffect, u
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
 // Bump on every release — header compares this to the live deploy
-var APP_VERSION="3.27";
+var APP_VERSION="3.30";
 var LIFTS=["squat","bench","deadlift","press"];
 var LIFT_LABELS={squat:"Squat",bench:"Bench",deadlift:"Deadlift",press:"OHP"};
 var DAY_LABELS=["Squat","Bench","Deadlift","OHP"];
@@ -151,6 +151,26 @@ function dayCount(cfg){
 }
 function dayLabel(cfg, dayIdx){
   return LIFT_LABELS[dayLift(cfg, dayIdx)]||("Day "+(dayIdx+1));
+}
+// Program position after a logged session.
+// Uses last session's *lift* in the *current* Settings dayOrder so changing
+// weekly order doesn't map an old day index onto the wrong lift.
+function nextPosAfterEntry(entry, cfg){
+  if(!entry) return {cycle:1,week:1,day:0};
+  var order=normalizeDayOrder(cfg&&cfg.dayOrder);
+  var maxD=Math.max(0, order.length-1);
+  var week=Number(entry.week)||1;
+  var cycle=Number(entry.cycle)||1;
+  var lastLift=resolveLiftKeyFromHistory(entry);
+  var idx=lastLift?order.indexOf(lastLift):-1;
+  if(idx<0){
+    idx=Number(entry.day);
+    if(!isFinite(idx)||idx<0) idx=0;
+    if(idx>maxD) idx=maxD;
+  }
+  if(idx<maxD) return {cycle:cycle,week:week,day:idx+1};
+  if(week<4) return {cycle:cycle,week:week+1,day:0};
+  return {cycle:cycle+1,week:1,day:0};
 }
 // Resolve which main lift a history entry is for.
 // Priority: explicit liftKey → lift label string → day as FIXED LIFTS index.
@@ -1550,8 +1570,15 @@ function App(){
     if(saved.cycle==null) saved.cycle=1;
     var maxD=dayCount(saved.cfg)-1;
     if(saved.day>maxD) saved.day=maxD;
-    // Heal / clamp the live "next workout" pointer
-    if(!saved.current||typeof saved.current!=="object"){
+    // Heal / clamp the live "next workout" pointer from last history entry when present
+    // so a stale current.day can't show Bench after OHP when next is Deadlift deload.
+    if(saved.history&&saved.history.length){
+      var healed=nextPosAfterEntry(saved.history[0], saved.cfg);
+      saved.current=healed;
+      saved.cycle=healed.cycle;
+      saved.week=healed.week;
+      saved.day=healed.day;
+    } else if(!saved.current||typeof saved.current!=="object"){
       saved.current={cycle:saved.cycle,week:saved.week,day:saved.day};
     } else {
       if(saved.current.cycle==null) saved.current.cycle=saved.cycle;
@@ -1612,7 +1639,9 @@ function App(){
   var bwInpState=useState(""); var bwInp=bwInpState[0],setBwInp=bwInpState[1];
   var swipeRef=useRef({x:0,y:0,active:false});
   function jumpToAnchor(){
-    var a=st.current||{cycle:st.cycle,week:st.week,day:st.day};
+    var a=(st.history&&st.history[0])
+      ? nextPosAfterEntry(st.history[0], st.cfg)
+      : (st.current||{cycle:st.cycle,week:st.week,day:st.day});
     setSt(function(p){
       var maxD=Math.max(0, dayCount(p.cfg)-1);
       var d=a.day!=null?a.day:(p.day||0);
@@ -1927,17 +1956,22 @@ function App(){
   function toggleFocusMode(){
     setSt(function(p){return Object.assign({},p,{cfg:Object.assign({},p.cfg,{focusMode:!p.cfg.focusMode})});});
   }
-  // Main 5/3/1 sets: cascadeForward=false → only the edited set changes (FSL tracks set 1 separately).
-  // Warmup / FSL / BBB: cascadeForward=true → same delta to later sets in that group.
+  // Main 5/3/1 sets: cascadeForward=false → ONLY this set is overridden; other main sets
+  // are cleared so they always show pure TM×%. FSL is not written here — it reads set 1 live.
+  // Warmup / BBB: cascadeForward=true → delta applied to later sets in that group.
   function applyWeightCascade(groupKey,fromIndex,groupSize,newDisplayWt,baseWeights,currentDisplayWt,actualWeights,cascadeForward){
     var newKg=fromDisp(newDisplayWt,st.cfg.unit);
     var currentKg=fromDisp(currentDisplayWt,st.cfg.unit);
     var deltaKg=newKg-currentKg;
-    var doCascade=cascadeForward!==false;
+    // Require explicit true — main 5/3/1 passes false so sets never cascade off each other
+    var doCascade=cascadeForward===true;
     setSt(function(p){
       var w=Object.assign({},p.weightOverrides||{});
       if(!doCascade){
-        w[groupKey+fromIndex]=r5(newKg);
+        for(var j=0;j<groupSize;j++){
+          if(j===fromIndex) w[groupKey+j]=r5(newKg);
+          else delete w[groupKey+j]; // force other main sets back to TM×%
+        }
       }else{
         for(var i=fromIndex;i<groupSize;i++){
           var k=groupKey+i;
@@ -2454,16 +2488,18 @@ function App(){
   );
 
   // ── HOME TAB ─────────────────────────────────────────────────────────────
-  // Always show the live program pointer (current), not whatever day you last browsed.
-  var anchor=st.current||{cycle:st.cycle,week:st.week,day:st.day};
-  var anchorDay=anchor.day!=null?anchor.day:st.day;
-  var anchorWeek=anchor.week!=null?anchor.week:st.week;
-  var anchorCycle=anchor.cycle!=null?anchor.cycle:st.cycle;
+  // Next workout = after last logged session (history wins over a stale current pointer).
+  var lastEntry=st.history[0]||null;
+  var anchor=lastEntry
+    ? nextPosAfterEntry(lastEntry, st.cfg)
+    : (st.current||{cycle:st.cycle,week:st.week,day:st.day});
+  var anchorDay=anchor.day!=null?anchor.day:0;
+  var anchorWeek=anchor.week!=null?anchor.week:1;
+  var anchorCycle=anchor.cycle!=null?anchor.cycle:1;
   var nextLiftKey=dayLift(st.cfg,anchorDay);
   var nextLift=LIFT_LABELS[nextLiftKey];
   var nextTM=st.tms[nextLiftKey]||0;
   var nextWave=getMainSets(st.cfg.variant,anchorWeek);
-  var lastEntry=st.history[0]||null;
 
   var homeContent=h("div",null,
     // Hero card
@@ -3702,7 +3738,16 @@ function App(){
         });
         // Main 5/3/1 sets: noCascade — only this set changes; FSL still tracks set 1.
         // Warmup / FSL / BBB groups: cascade delta to later sets in that group.
-        applyWeightCascade(editPop.groupKey,editPop.index,editPop.groupSize,newVal,editPop.baseWeights,editPop.value,actualWeights,!editPop.noCascade);
+        applyWeightCascade(
+          editPop.groupKey,
+          editPop.index,
+          editPop.groupSize,
+          newVal,
+          editPop.baseWeights,
+          editPop.value,
+          actualWeights,
+          editPop.noCascade?false:true
+        );
       }
     }),
     header,
