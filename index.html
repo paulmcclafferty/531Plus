@@ -126,7 +126,7 @@ var h=React.createElement, useState=React.useState, useEffect=React.useEffect, u
 
 // ── CONSTANTS ────────────────────────────────────────────────────────────────
 // Bump on every release — header compares this to the live deploy
-var APP_VERSION="3.31";
+var APP_VERSION="3.32";
 var LIFTS=["squat","bench","deadlift","press"];
 var LIFT_LABELS={squat:"Squat",bench:"Bench",deadlift:"Deadlift",press:"OHP"};
 var DAY_LABELS=["Squat","Bench","Deadlift","OHP"];
@@ -1956,22 +1956,20 @@ function App(){
   function toggleFocusMode(){
     setSt(function(p){return Object.assign({},p,{cfg:Object.assign({},p.cfg,{focusMode:!p.cfg.focusMode})});});
   }
-  // Main 5/3/1 sets: cascadeForward=false → ONLY this set is overridden; other main sets
-  // are cleared so they always show pure TM×%. FSL is not written here — it reads set 1 live.
+  // Main 5/3/1 sets: cascadeForward=false → ONLY the edited set is written.
+  // Other main-set overrides stay put (fully independent). Default weight = TM×%.
+  // FSL is not written here — it always reads live main set 1 on render.
   // Warmup / BBB: cascadeForward=true → delta applied to later sets in that group.
   function applyWeightCascade(groupKey,fromIndex,groupSize,newDisplayWt,baseWeights,currentDisplayWt,actualWeights,cascadeForward){
     var newKg=fromDisp(newDisplayWt,st.cfg.unit);
     var currentKg=fromDisp(currentDisplayWt,st.cfg.unit);
     var deltaKg=newKg-currentKg;
-    // Require explicit true — main 5/3/1 passes false so sets never cascade off each other
     var doCascade=cascadeForward===true;
     setSt(function(p){
       var w=Object.assign({},p.weightOverrides||{});
       if(!doCascade){
-        for(var j=0;j<groupSize;j++){
-          if(j===fromIndex) w[groupKey+j]=r5(newKg);
-          else delete w[groupKey+j]; // force other main sets back to TM×%
-        }
+        // Independent main set: change this index only — never touch the others
+        w[groupKey+fromIndex]=r5(newKg);
       }else{
         for(var i=fromIndex;i<groupSize;i++){
           var k=groupKey+i;
